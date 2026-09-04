@@ -1,9 +1,22 @@
 # ============================================================================
 # AKL — Enterprise AI Knowledge Lakehouse
-# Developer entry point (PRD §11.6). Requires: uv, docker, docker compose.
+# Developer entry point (PRD §11.6). Requires: uv, docker, docker compose,
+# GNU Make, and on Windows: Git for Windows (provides bash, grep, awk, find).
 # ============================================================================
 
-SHELL := /bin/bash
+# --- Portable shell selection --------------------------------------------
+# Linux/macOS: /bin/bash. Windows: Git Bash. Override with: make SHELL=...
+ifeq ($(OS),Windows_NT)
+	GIT_BASH := $(firstword $(wildcard C:/Program\ Files/Git/bin/bash.exe C:/Program\ Files\ (x86)/Git/bin/bash.exe $(LOCALAPPDATA)/Programs/Git/bin/bash.exe))
+	ifeq ($(GIT_BASH),)
+		$(error Git Bash not found. Install Git for Windows or run: make SHELL="C:/path/to/bash.exe")
+	endif
+	SHELL := $(GIT_BASH)
+else
+	SHELL := /bin/bash
+endif
+.SHELLFLAGS := -eu -o pipefail -c
+
 .DEFAULT_GOAL := help
 
 UV            ?= uv
@@ -11,6 +24,7 @@ PY            := $(UV) run python
 COMPOSE_BASE  := docker compose -f docker-compose.yml
 COMPOSE_DEV   := $(COMPOSE_BASE) -f docker-compose.dev.yml
 COMPOSE_PROD  := $(COMPOSE_BASE) -f docker-compose.prod.yml
+YAMLLINT_CFG  := {extends: default, rules: {line-length: {max: 140}, document-start: disable, truthy: disable}}
 
 # Milestone that implements a not-yet-available target (edited as we go).
 define not_yet
@@ -38,7 +52,7 @@ lint: ## Ruff lint + format check + mypy + yamllint
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
 	$(UV) run mypy
-	$(UV) run yamllint -d "{extends: default, rules: {line-length: {max: 140}, document-start: disable, truthy: disable}}" .
+	$(UV) run yamllint -d '$(YAMLLINT_CFG)' .
 
 .PHONY: fmt
 fmt: ## Auto-fix lint issues and format
@@ -46,8 +60,8 @@ fmt: ## Auto-fix lint issues and format
 	$(UV) run ruff format .
 
 .PHONY: test
-test: ## Run unit tests with coverage
-	$(UV) run pytest -m "not component and not integration and not api and not eval and not slow" --cov --cov-report=term-missing
+test: ## Run unit tests with coverage (exit code 5 = no tests collected, allowed)
+	$(UV) run pytest -m "not component and not integration and not api and not eval and not slow" --cov --cov-report=term-missing || [ $$? -eq 5 ]
 
 .PHONY: test-unit
 test-unit: ## Unit tests only
