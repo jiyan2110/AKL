@@ -1,4 +1,8 @@
-"""SQLAlchemy ORM models for the AKL metadata catalogue."""
+"""SQLAlchemy ORM models for the ``akl`` database (PRD Appendix A).
+
+Milestone 5: A.7 pipeline_runs/task_runs, A.14 lakehouse_*, runtime_config.
+Milestone 9: all remaining domain tables (A.1–A.6, A.8–A.14).
+"""
 
 from __future__ import annotations
 
@@ -33,6 +37,7 @@ NAMING_CONVENTION = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
 SOURCE_TYPES = ("pdf", "markdown", "html", "github")
 DOCUMENT_STATUSES = ("bronze", "silver", "gold", "quarantined", "deleting", "deleted")
 SECURITY_LEVELS = ("public", "internal", "restricted")
@@ -42,10 +47,12 @@ SYNC_OPS = ("upsert", "delete")
 
 
 def _in(values: tuple[str, ...]) -> str:
-    return ", ".join(f"'{value}'" for value in values)
+    return ", ".join(f"'{v}'" for v in values)
 
 
 class Base(DeclarativeBase):
+    """Declarative base with deterministic constraint names and PG type mapping."""
+
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
     type_annotation_map = {
         datetime: TIMESTAMP(timezone=True),
@@ -55,8 +62,12 @@ class Base(DeclarativeBase):
     }
 
 
+# ===========================================================================
+# A.7 — pipeline_runs, task_runs   (Milestone 5)
+# ===========================================================================
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
+
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
     dag_id: Mapped[str] = mapped_column(Text, nullable=False)
     correlation_id: Mapped[str | None] = mapped_column(Text)
@@ -66,11 +77,13 @@ class PipelineRun(Base):
     conf: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     gold_snapshot_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_pipeline_runs_dag_id_started_at", "dag_id", started_at.desc()),)
 
 
 class TaskRun(Base):
     __tablename__ = "task_runs"
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(
         ForeignKey("pipeline_runs.run_id", ondelete="CASCADE"), nullable=False
@@ -85,11 +98,16 @@ class TaskRun(Base):
     rows_out: Mapped[int | None] = mapped_column(BigInteger)
     metrics: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_task_runs_run_id", "run_id"),)
 
 
+# ===========================================================================
+# A.14 — lakehouse_schema_versions, lakehouse_files, runtime_config (Milestone 5)
+# ===========================================================================
 class LakehouseSchemaVersion(Base):
     __tablename__ = "lakehouse_schema_versions"
+
     dataset: Mapped[str] = mapped_column(Text, primary_key=True)
     schema_version: Mapped[str] = mapped_column(Text, primary_key=True)
     pyarrow_schema_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -98,6 +116,7 @@ class LakehouseSchemaVersion(Base):
 
 class LakehouseFile(Base):
     __tablename__ = "lakehouse_files"
+
     object_key: Mapped[str] = mapped_column(Text, primary_key=True)
     dataset: Mapped[str] = mapped_column(Text, nullable=False)
     partition: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
@@ -106,6 +125,7 @@ class LakehouseFile(Base):
     run_id: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (
         Index(
             "ix_lakehouse_files_dataset_partition_is_active", "dataset", "partition", "is_active"
@@ -115,6 +135,7 @@ class LakehouseFile(Base):
 
 class RuntimeConfig(Base):
     __tablename__ = "runtime_config"
+
     key: Mapped[str] = mapped_column(Text, primary_key=True)
     value: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     updated_by: Mapped[str | None] = mapped_column(Text)
@@ -123,8 +144,14 @@ class RuntimeConfig(Base):
     )
 
 
+# ===========================================================================
+# A.1 / A.2 — documents, document_versions
+# ===========================================================================
 class Document(Base):
+    """Current-state pointer for a document (full history in Silver Parquet)."""
+
     __tablename__ = "documents"
+
     document_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     canonical_source_uri: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -154,6 +181,7 @@ class Document(Base):
     updated_at: Mapped[datetime] = mapped_column(
         nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
     __table_args__ = (
         CheckConstraint(f"source_type IN ({_in(SOURCE_TYPES)})", name="source_type"),
         CheckConstraint(f"status IN ({_in(DOCUMENT_STATUSES)})", name="status"),
@@ -166,7 +194,10 @@ class Document(Base):
 
 
 class DocumentVersion(Base):
+    """One (document, content, parser) version — mirrors Silver ``documents`` rows."""
+
     __tablename__ = "document_versions"
+
     document_version_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False
@@ -185,6 +216,7 @@ class DocumentVersion(Base):
     fetched_at: Mapped[datetime | None]
     parsed_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (
         UniqueConstraint("document_id", "content_sha256", "parser_version"),
         Index("ix_document_versions_content_sha256", "content_sha256"),
@@ -192,8 +224,12 @@ class DocumentVersion(Base):
     )
 
 
+# ===========================================================================
+# A.3 — chunks (current-state index)
+# ===========================================================================
 class Chunk(Base):
     __tablename__ = "chunks"
+
     chunk_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     chunk_key: Mapped[str] = mapped_column(String(40), nullable=False)
     lineage_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
@@ -222,6 +258,7 @@ class Chunk(Base):
     updated_at: Mapped[datetime] = mapped_column(
         nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
     __table_args__ = (
         CheckConstraint(
             f"embedding_status IN ({_in(EMBEDDING_STATUSES)})", name="embedding_status"
@@ -244,8 +281,12 @@ class Chunk(Base):
     )
 
 
+# ===========================================================================
+# A.4 / A.5 / A.6 — embedding_cache, embedding_jobs, embedding_backlog, qdrant_sync_ops
+# ===========================================================================
 class EmbeddingCache(Base):
     __tablename__ = "embedding_cache"
+
     embedded_text_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     model_id: Mapped[str] = mapped_column(Text, primary_key=True)
     model_version: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -254,11 +295,13 @@ class EmbeddingCache(Base):
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_hit_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_embedding_cache_last_hit_at", "last_hit_at"),)
 
 
 class EmbeddingJob(Base):
     __tablename__ = "embedding_jobs"
+
     job_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     run_id: Mapped[str | None] = mapped_column(Text)
     embedding_version: Mapped[str] = mapped_column(Text, nullable=False)
@@ -272,28 +315,37 @@ class EmbeddingJob(Base):
     throughput_cps: Mapped[float | None] = mapped_column(Float)
     mlflow_run_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_embedding_jobs_run_id", "run_id"),)
 
 
 class EmbeddingBacklog(Base):
     __tablename__ = "embedding_backlog"
+
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
     chunk_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     shard: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
     __table_args__ = (Index("ix_embedding_backlog_run_id_shard", "run_id", "shard"),)
 
 
 class QdrantSyncOp(Base):
     __tablename__ = "qdrant_sync_ops"
+
     run_id: Mapped[str] = mapped_column(Text, primary_key=True)
     op: Mapped[str] = mapped_column(Text, primary_key=True)
     chunk_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     applied: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
     __table_args__ = (CheckConstraint(f"op IN ({_in(SYNC_OPS)})", name="op"),)
 
 
+# ===========================================================================
+# A.8 / A.9 / A.10 — lineage_edges, connector_state, quarantine_items
+# ===========================================================================
 class LineageEdge(Base):
     __tablename__ = "lineage_edges"
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(Text, nullable=False)
     task_id: Mapped[str | None] = mapped_column(Text)
@@ -304,6 +356,7 @@ class LineageEdge(Base):
     rows_in: Mapped[int | None] = mapped_column(BigInteger)
     rows_out: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (
         Index(
             "ix_lineage_edges_output_dataset_output_partition", "output_dataset", "output_partition"
@@ -314,6 +367,7 @@ class LineageEdge(Base):
 
 class ConnectorState(Base):
     __tablename__ = "connector_state"
+
     connector_id: Mapped[str] = mapped_column(Text, primary_key=True)
     connector_name: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[dict[str, Any]] = mapped_column(
@@ -329,6 +383,7 @@ class ConnectorState(Base):
 
 class QuarantineItem(Base):
     __tablename__ = "quarantine_items"
+
     quarantine_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     document_id: Mapped[uuid.UUID | None]
     content_sha256: Mapped[str | None] = mapped_column(String(64))
@@ -341,6 +396,7 @@ class QuarantineItem(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None]
+
     __table_args__ = (
         CheckConstraint(f"status IN ({_in(QUARANTINE_STATUSES)})", name="status"),
         Index("ix_quarantine_items_status_created_at", "status", "created_at"),
@@ -348,8 +404,12 @@ class QuarantineItem(Base):
     )
 
 
+# ===========================================================================
+# A.11 — users, api_keys
+# ===========================================================================
 class User(Base):
     __tablename__ = "users"
+
     user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     subject: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     email: Mapped[str | None] = mapped_column(Text)
@@ -367,6 +427,7 @@ class User(Base):
 
 class ApiKey(Base):
     __tablename__ = "api_keys"
+
     key_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     prefix: Mapped[str] = mapped_column(String(8), nullable=False, unique=True)
     key_hash: Mapped[str] = mapped_column(Text, nullable=False)
@@ -385,8 +446,12 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 
 
+# ===========================================================================
+# A.12 — conversations, messages, answer_citations, retrieval_traces
+# ===========================================================================
 class Conversation(Base):
     __tablename__ = "conversations"
+
     conversation_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     principal_id: Mapped[str] = mapped_column(Text, nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
@@ -397,6 +462,7 @@ class Conversation(Base):
         nullable=False, server_default=func.now(), onupdate=func.now()
     )
     expires_at: Mapped[datetime | None]
+
     __table_args__ = (
         Index("ix_conversations_principal_id_updated_at", "principal_id", "updated_at"),
         Index("ix_conversations_expires_at", "expires_at"),
@@ -405,6 +471,7 @@ class Conversation(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+
     message_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("conversations.conversation_id", ondelete="CASCADE"), nullable=False
@@ -420,11 +487,13 @@ class Message(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     flags: Mapped[list[str] | None]
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_messages_conversation_id_turn", "conversation_id", "turn"),)
 
 
 class AnswerCitation(Base):
     __tablename__ = "answer_citations"
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     message_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("messages.message_id", ondelete="CASCADE"), nullable=False
@@ -435,6 +504,7 @@ class AnswerCitation(Base):
     document_id: Mapped[uuid.UUID | None]
     locator: Mapped[str | None] = mapped_column(Text)
     score: Mapped[float | None] = mapped_column(Float)
+
     __table_args__ = (
         Index("ix_answer_citations_message_id", "message_id"),
         Index("ix_answer_citations_chunk_id", "chunk_id"),
@@ -443,6 +513,7 @@ class AnswerCitation(Base):
 
 class RetrievalTrace(Base):
     __tablename__ = "retrieval_traces"
+
     trace_id: Mapped[str] = mapped_column(Text, primary_key=True)
     request_id: Mapped[str | None] = mapped_column(Text)
     principal_id: Mapped[str | None] = mapped_column(Text)
@@ -457,11 +528,16 @@ class RetrievalTrace(Base):
     gold_snapshot_id: Mapped[str | None] = mapped_column(Text)
     timings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_retrieval_traces_created_at", "created_at"),)
 
 
+# ===========================================================================
+# A.13 — audit_log (declaratively partitioned by month on ts)
+# ===========================================================================
 class AuditLog(Base):
     __tablename__ = "audit_log"
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(primary_key=True, server_default=func.now())
     principal_id: Mapped[str | None] = mapped_column(Text)
@@ -473,6 +549,7 @@ class AuditLog(Base):
     user_agent: Mapped[str | None] = mapped_column(Text)
     outcome: Mapped[str | None] = mapped_column(Text)
     details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
     __table_args__ = (
         Index("ix_audit_log_principal_id_ts", "principal_id", "ts"),
         Index("ix_audit_log_action_ts", "action", "ts"),
@@ -481,18 +558,24 @@ class AuditLog(Base):
     )
 
 
+# ===========================================================================
+# A.14 — idempotency_keys, admin_jobs, pii_mentions, rate_limit_buckets
+# ===========================================================================
 class IdempotencyKey(Base):
     __tablename__ = "idempotency_keys"
+
     key: Mapped[str] = mapped_column(Text, primary_key=True)
     principal_id: Mapped[str | None] = mapped_column(Text)
     request_hash: Mapped[str | None] = mapped_column(String(64))
     response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
     __table_args__ = (Index("ix_idempotency_keys_created_at", "created_at"),)
 
 
 class AdminJob(Base):
     __tablename__ = "admin_jobs"
+
     job_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     type: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
@@ -508,6 +591,7 @@ class AdminJob(Base):
 
 class PiiMention(Base):
     __tablename__ = "pii_mentions"
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False
@@ -515,6 +599,7 @@ class PiiMention(Base):
     chunk_id: Mapped[uuid.UUID | None]
     pii_type: Mapped[str] = mapped_column(Text, nullable=False)
     value_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
     __table_args__ = (
         Index("ix_pii_mentions_value_hash", "value_hash"),
         Index("ix_pii_mentions_document_id", "document_id"),
@@ -523,6 +608,7 @@ class PiiMention(Base):
 
 class RateLimitBucket(Base):
     __tablename__ = "rate_limit_buckets"
+
     principal_id: Mapped[str] = mapped_column(Text, primary_key=True)
     route_class: Mapped[str] = mapped_column(Text, primary_key=True)
     tokens: Mapped[float] = mapped_column(Float, nullable=False)

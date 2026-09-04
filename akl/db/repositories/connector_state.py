@@ -1,4 +1,4 @@
-"""Connector cursor repository."""
+"""ConnectorStateRepository — incremental cursors per connector instance (PRD §3.2.1, Appendix A.9)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class ConnectorStateRepository(Repository):
     def save(
         self, connector_id: str, connector_name: str, state: dict[str, Any], *, run_id: str
     ) -> None:
-        self.session.execute(
+        stmt = (
             pg_insert(ConnectorState)
             .values(
                 connector_id=connector_id,
@@ -38,6 +38,7 @@ class ConnectorStateRepository(Repository):
                 },
             )
         )
+        self.session.execute(stmt)
 
     def mark_success(self, connector_id: str, *, documents_count: int) -> None:
         self.session.execute(

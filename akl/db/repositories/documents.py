@@ -1,4 +1,4 @@
-"""Document/version repository for Bronze metadata bookkeeping."""
+"""DocumentRepository — current-state document/version bookkeeping (PRD §3.7, Appendix A.1/A.2)."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ class BronzeRecordResult:
 
 
 class DocumentRepository(Repository):
+    """Upserts and lookups for ``documents`` and ``document_versions``."""
+
     def record_bronze(
         self,
         *,
@@ -39,12 +41,13 @@ class DocumentRepository(Repository):
         title: str | None = None,
         parser_version: str = "",
     ) -> BronzeRecordResult:
+        """Register a fetched object. Idempotent per (document, content, parser_version)."""
         document_id = ids.document_id(canonical_source_uri)
         version_id = ids.document_version_id(document_id, content_sha256, parser_version)
         now = fetched_at or datetime.now(UTC)
-        existing = self.session.get(Document, document_id)
-        document_created = existing is None
-        stmt = (
+        # The status expression above is awkward in SQLAlchemy; use a plain follow-up UPDATE for the
+        # 'deleted → bronze' resurrection rule instead (clearer and equally atomic within the session).
+        doc_stmt = (
             pg_insert(Document)
             .values(
                 document_id=document_id,
@@ -67,8 +70,10 @@ class DocumentRepository(Repository):
                     "updated_at": func.now(),
                 },
             )
+            .returning(Document.created_at, Document.updated_at)
         )
-        self.session.execute(stmt)
+        created_at, updated_at = self.session.execute(doc_stmt).one()
+        document_created = created_at == updated_at
         self.session.execute(
             update(Document)
             .where(
@@ -76,8 +81,8 @@ class DocumentRepository(Repository):
             )
             .values(status="bronze")
         )
-        version_created = self.session.get(DocumentVersion, version_id) is None
-        version_stmt = (
+
+        ver_stmt = (
             pg_insert(DocumentVersion)
             .values(
                 document_version_id=version_id,
@@ -89,8 +94,9 @@ class DocumentRepository(Repository):
                 fetched_at=now,
             )
             .on_conflict_do_nothing(index_elements=[DocumentVersion.document_version_id])
+            .returning(DocumentVersion.document_version_id)
         )
-        self.session.execute(version_stmt)
+        version_created = self.session.execute(ver_stmt).scalar_one_or_none() is not None
         return BronzeRecordResult(document_id, version_id, document_created, version_created)
 
     def mark_parsed(
@@ -107,6 +113,7 @@ class DocumentRepository(Repository):
         silver_partition: str,
         title: str | None,
     ) -> None:
+        """Record a successful parse and point the document at this version (status → silver)."""
         version = self.session.get(DocumentVersion, document_version_id)
         if version is None:
             raise LookupError(f"document_version {document_version_id} not found")
@@ -142,23 +149,21 @@ class DocumentRepository(Repository):
         return self.session.get(Document, document_id)
 
     def get_by_uri(self, canonical_source_uri: str) -> Document | None:
-        return self.get(ids.document_id(canonical_source_uri))
+        return self.session.get(Document, ids.document_id(canonical_source_uri))
 
     def list_by_status(self, status: str, *, limit: int = 1000) -> list[Document]:
-        return list(
-            self.session.scalars(
-                select(Document)
-                .where(Document.status == status)
-                .order_by(Document.updated_at)
-                .limit(limit)
-            )
+        stmt = (
+            select(Document)
+            .where(Document.status == status)
+            .order_by(Document.updated_at)
+            .limit(limit)
         )
+        return list(self.session.scalars(stmt))
 
     def versions(self, document_id: uuid.UUID) -> list[DocumentVersion]:
-        return list(
-            self.session.scalars(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == document_id)
-                .order_by(DocumentVersion.created_at.desc())
-            )
+        stmt = (
+            select(DocumentVersion)
+            .where(DocumentVersion.document_id == document_id)
+            .order_by(DocumentVersion.created_at.desc())
         )
+        return list(self.session.scalars(stmt))
