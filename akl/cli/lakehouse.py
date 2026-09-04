@@ -17,6 +17,7 @@ from akl.errors import AKLError
 from akl.lakehouse.bronze import BronzeStore, new_run_id
 from akl.lakehouse.engine import DuckDBEngine
 from akl.lakehouse.io import LakehouseIO, Layer
+from akl.lakehouse.silver import SilverStore
 
 lakehouse_app = typer.Typer(
     help="Lakehouse storage operations (DuckDB + MinIO).", no_args_is_help=True
@@ -243,3 +244,22 @@ def bronze_ls(
         row["document_id"] = str(row["document_id"])[:8] + "..."
         typer.echo("  ".join(f"{key}={row[key]}" for key in columns))
     typer.echo(f"({table.num_rows} manifest rows)")
+
+
+@lakehouse_app.command("silver-status")
+def silver_status(config_file: ConfigOpt = None) -> None:
+    """Register current-state views and print Silver dataset/file counts."""
+    settings = _settings(config_file)
+    try:
+        with DuckDBEngine(settings) as engine:
+            io = LakehouseIO(settings, engine)
+            store = SilverStore(io, engine)
+            for dataset in ("documents", "chunks", "dedup_ledger"):
+                files = io.list_files(Layer.SILVER, dataset)
+                typer.echo(
+                    f"silver/{dataset:<13} files={len(files):<4} bytes={sum(file.size_bytes for file in files):,}"
+                )
+            for name, count in store.view_counts().items():
+                typer.secho(f"{name:<22} rows={count}", fg=typer.colors.GREEN)
+    except AKLError as exc:
+        _fail(exc)
