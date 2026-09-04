@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import typer
 
 from akl import __version__
+from akl.cli.lakehouse import lakehouse_app
 from akl.config import Settings
 from akl.errors import AKLError
 
@@ -22,6 +23,7 @@ app = typer.Typer(
 )
 config_app = typer.Typer(help="Inspect and validate configuration.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
+app.add_typer(lakehouse_app, name="lakehouse")
 
 
 def _version_callback(value: bool) -> None:

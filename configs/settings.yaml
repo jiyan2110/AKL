@@ -29,3 +29,10 @@ qdrant:
   prefer_grpc: true
   collection_alias: kb_chunks
   collection: kb_chunks_v1
+
+lakehouse:
+  parquet_compression: ZSTD
+  parquet_zstd_level: 3
+  duckdb_memory_limit: 4GB
+  duckdb_threads: 4
+  lakehouse_use_file_manifest: false

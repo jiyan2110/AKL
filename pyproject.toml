@@ -19,6 +19,9 @@ dependencies = [
 	"structlog>=24.4",
 	"typer>=0.12",
 	"pyyaml>=6.0",
+	"duckdb>=1.1,<2",
+	"pyarrow>=17.0",
+	"boto3>=1.35",
 ]
 
 [project.optional-dependencies]
@@ -88,7 +91,7 @@ files = ["akl"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["airflow.*", "duckdb.*", "qdrant_client.*", "rank_bm25.*", "fitz.*", "pdfplumber.*", "selectolax.*", "trafilatura.*", "markdown_it.*", "onnxruntime.*", "mlflow.*"]
+module = ["airflow.*", "duckdb.*", "qdrant_client.*", "rank_bm25.*", "fitz.*", "pdfplumber.*", "selectolax.*", "trafilatura.*", "markdown_it.*", "onnxruntime.*", "mlflow.*", "pyarrow.*", "boto3.*", "botocore.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

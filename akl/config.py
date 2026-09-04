@@ -163,11 +163,29 @@ class QdrantSettings(_SectionSettings):
     collection: str = "kb_chunks_v1"
 
 
+class ParquetCompression(StrEnum):
+    ZSTD = "ZSTD"
+    SNAPPY = "SNAPPY"
+    UNCOMPRESSED = "UNCOMPRESSED"
+
+
+class LakehouseSettings(_SectionSettings):
+    yaml_section: ClassVar[str] = "lakehouse"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    parquet_compression: ParquetCompression = ParquetCompression.ZSTD
+    parquet_zstd_level: int = Field(default=3, ge=1, le=22)
+    duckdb_memory_limit: str = "4GB"
+    duckdb_threads: int = Field(default=4, ge=1)
+    lakehouse_use_file_manifest: bool = False
+
+
 _SECTIONS: tuple[type[_SectionSettings], ...] = (
     CoreSettings,
     DatabaseSettings,
     S3Settings,
     QdrantSettings,
+    LakehouseSettings,
 )
 
 
@@ -178,6 +196,7 @@ class Settings(BaseModel):
     db: DatabaseSettings
     s3: S3Settings
     qdrant: QdrantSettings
+    lakehouse: LakehouseSettings
     config_file: Path | None = None
 
     @model_validator(mode="after")
@@ -228,6 +247,7 @@ class Settings(BaseModel):
                 db=sections["database"],
                 s3=sections["s3"],
                 qdrant=sections["qdrant"],
+                lakehouse=sections["lakehouse"],
                 config_file=resolved_file if resolved_file.exists() else None,
             )
         except ValidationError as exc:
