@@ -229,6 +229,47 @@ class LakehouseIO:
             raise LakehouseIOError("delete failed", details={"error": str(exc)}) from exc
         return deleted
 
+    def object_exists(self, key: str) -> bool:
+        try:
+            self._s3.head_object(Bucket=self._bucket, Key=key)
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise LakehouseIOError("head failed", details={"key": key, "error": str(exc)}) from exc
+        except BotoCoreError as exc:
+            raise LakehouseIOError("head failed", details={"key": key, "error": str(exc)}) from exc
+
+    def put_object(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        content_type: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        """Upload bytes, refusing to overwrite immutable Bronze raw objects."""
+        if key.startswith("bronze/raw/") and self.object_exists(key):
+            raise LakehouseIOError(
+                "refusing to overwrite immutable bronze/raw object", details={"key": key}
+            )
+        kwargs: dict[str, Any] = {"Bucket": self._bucket, "Key": key, "Body": data}
+        if content_type:
+            kwargs["ContentType"] = content_type
+        if metadata:
+            kwargs["Metadata"] = metadata
+        try:
+            self._s3.put_object(**kwargs)
+        except (ClientError, BotoCoreError) as exc:
+            raise LakehouseIOError("put failed", details={"key": key, "error": str(exc)}) from exc
+
+    def get_object(self, key: str) -> bytes:
+        try:
+            body = self._s3.get_object(Bucket=self._bucket, Key=key)["Body"]
+            return bytes(body.read())
+        except (ClientError, BotoCoreError) as exc:
+            raise LakehouseIOError("get failed", details={"key": key, "error": str(exc)}) from exc
+
     def _compression_clause(self) -> str:
         lakehouse = self._settings.lakehouse
         if lakehouse.parquet_compression is ParquetCompression.ZSTD:

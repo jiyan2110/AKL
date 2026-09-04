@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +14,7 @@ import typer
 
 from akl.config import Settings
 from akl.errors import AKLError
+from akl.lakehouse.bronze import BronzeStore, new_run_id
 from akl.lakehouse.engine import DuckDBEngine
 from akl.lakehouse.io import LakehouseIO, Layer
 
@@ -152,3 +155,91 @@ def lakehouse_ls(
         total += file.size_bytes
         typer.echo(f"{file.size_bytes:>12,}  {file.last_modified:%Y-%m-%d %H:%M:%S}  {file.key}")
     typer.echo(f"{len(files)} file(s), {total:,} bytes under s3://{io.bucket}/{layer}/{dataset}/")
+
+
+@lakehouse_app.command("bronze-put")
+def bronze_put(
+    path: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
+    source_type: Annotated[str, typer.Option("--source-type", "-t")],
+    uri: Annotated[str | None, typer.Option("--uri")] = None,
+    mime_type: Annotated[str | None, typer.Option("--mime")] = None,
+    config_file: ConfigOpt = None,
+) -> None:
+    """Store a file content-addressed in Bronze and append a manifest row."""
+    settings = _settings(config_file)
+    source_uri = uri or path.resolve().as_uri()
+    mime = mime_type or mimetypes.guess_type(path.name)[0]
+    run_id = new_run_id("cli")
+    try:
+        with DuckDBEngine(settings) as engine:
+            store = BronzeStore(LakehouseIO(settings, engine))
+            put = store.put_raw(
+                path.read_bytes(), source_type=source_type, mime_type=mime, filename=path.name
+            )
+            row = BronzeStore.build_manifest_row(
+                source_uri=source_uri,
+                source_type=source_type,
+                put=put,
+                connector_name="cli",
+                connector_version="0.1.0",
+                run_id=run_id,
+                mime_type=mime,
+                source_metadata={"filename": path.name},
+            )
+            result = store.write_manifest([row], run_id=run_id)
+    except AKLError as exc:
+        _fail(exc)
+        return
+    typer.secho(
+        f"[OK ] raw       {put.object_key} ({put.size_bytes} bytes) deduplicated={put.deduplicated}",
+        fg=typer.colors.GREEN,
+    )
+    typer.secho(
+        f"[OK ] manifest  {result.rows} row -> {result.files[0] if result.files else '?'}",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "document_id": row["document_id"],
+                "content_sha256": put.content_sha256,
+                "run_id": run_id,
+            },
+            indent=2,
+        )
+    )
+
+
+@lakehouse_app.command("bronze-ls")
+def bronze_ls(
+    ingest_date: Annotated[str | None, typer.Option("--date")] = None,
+    limit: Annotated[int, typer.Option(help="Max rows to print.")] = 50,
+    config_file: ConfigOpt = None,
+) -> None:
+    """List Bronze manifest rows."""
+    settings = _settings(config_file)
+    try:
+        with DuckDBEngine(settings) as engine:
+            store = BronzeStore(LakehouseIO(settings, engine))
+            table = store.read_manifest(
+                ingest_date=date.fromisoformat(ingest_date) if ingest_date else None
+            )
+    except (AKLError, ValueError) as exc:
+        if isinstance(exc, AKLError):
+            _fail(exc)
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    columns = [
+        "ingest_date",
+        "source_type",
+        "document_id",
+        "content_sha256",
+        "size_bytes",
+        "source_uri",
+        "run_id",
+    ]
+    for row in table.select(columns).slice(0, limit).to_pylist():
+        row["content_sha256"] = str(row["content_sha256"])[:12] + "..."
+        row["document_id"] = str(row["document_id"])[:8] + "..."
+        typer.echo("  ".join(f"{key}={row[key]}" for key in columns))
+    typer.echo(f"({table.num_rows} manifest rows)")
