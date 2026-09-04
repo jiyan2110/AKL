@@ -110,7 +110,9 @@ def test_render_view_sql_substitutes_sources() -> None:
 
 def test_empty_current_views_have_zero_counts(engine: DuckDBEngine) -> None:
     registry = _register(engine, [], [])
-    assert registry.counts() == {"v_current_documents": 0, "v_current_chunks": 0}
+    counts = registry.counts()
+    assert counts["v_current_documents"] == 0
+    assert counts["v_current_chunks"] == 0
 
 
 def _register(
@@ -122,7 +124,12 @@ def _register(
     engine.register("t_chunks", enforce(pa.Table.from_pylist(chunks, schema=CHUNKS.schema), CHUNKS))
 
     def resolver(layer: Layer, dataset: str, schema: DatasetSchema) -> str:
-        return {"documents": "t_docs", "chunks": "t_chunks"}[dataset]
+        known = {"documents": "t_docs", "chunks": "t_chunks"}
+        if dataset in known:
+            return known[dataset]
+        name = f"t_{dataset.replace('/', '_')}"
+        engine.register(name, schema.empty_table())
+        return name
 
     registry = ViewRegistry(engine, resolver=resolver)
     registry.register_all()
@@ -154,7 +161,9 @@ def test_tombstone_row_removes_document_and_chunks(engine: DuckDBEngine) -> None
         doc_row("d1", "v1", T0 + timedelta(hours=2), is_deleted=True, is_current=False),
     ]
     registry = _register(engine, docs, [chunk_row("c1", "d1", "v1", T0)])
-    assert registry.counts() == {"v_current_documents": 0, "v_current_chunks": 0}
+    counts = registry.counts()
+    assert counts["v_current_documents"] == 0
+    assert counts["v_current_chunks"] == 0
 
 
 def test_current_chunks_follow_current_version(engine: DuckDBEngine) -> None:

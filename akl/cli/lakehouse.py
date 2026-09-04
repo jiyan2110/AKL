@@ -16,6 +16,7 @@ from akl.config import Settings
 from akl.errors import AKLError
 from akl.lakehouse.bronze import BronzeStore, new_run_id
 from akl.lakehouse.engine import DuckDBEngine
+from akl.lakehouse.gold import GoldStore
 from akl.lakehouse.io import LakehouseIO, Layer
 from akl.lakehouse.silver import SilverStore
 
@@ -261,5 +262,53 @@ def silver_status(config_file: ConfigOpt = None) -> None:
                 )
             for name, count in store.view_counts().items():
                 typer.secho(f"{name:<22} rows={count}", fg=typer.colors.GREEN)
+    except AKLError as exc:
+        _fail(exc)
+
+
+@lakehouse_app.command("gold-refresh")
+def gold_refresh(
+    chunk_quality_min: Annotated[float, typer.Option(help="Minimum chunk quality.")] = 0.30,
+    doc_quality_min: Annotated[float, typer.Option(help="Minimum document quality.")] = 0.35,
+    config_file: ConfigOpt = None,
+) -> None:
+    """Project newly-current Silver chunks into Gold retrieval units."""
+    settings = _settings(config_file)
+    run_id = new_run_id("cli")
+    try:
+        with DuckDBEngine(settings) as engine:
+            store = GoldStore(LakehouseIO(settings, engine), engine)
+            result, snapshot = store.refresh_retrieval_units(
+                run_id=run_id,
+                chunk_quality_min=chunk_quality_min,
+                doc_quality_min=doc_quality_min,
+            )
+    except AKLError as exc:
+        _fail(exc)
+        return
+    typer.secho(
+        f"[OK ] gold/retrieval_units +{result.rows} rows in {len(result.files)} file(s); gold_snapshot_id={snapshot}",
+        fg=typer.colors.GREEN,
+    )
+
+
+@lakehouse_app.command("gold-status")
+def gold_status(config_file: ConfigOpt = None) -> None:
+    """Register Gold views and print dataset, backlog, and coverage counts."""
+    settings = _settings(config_file)
+    try:
+        with DuckDBEngine(settings) as engine:
+            io = LakehouseIO(settings, engine)
+            store = GoldStore(io, engine)
+            for dataset in ("retrieval_units", "chunk_embeddings", "eval/qa_pairs", "stats"):
+                files = io.list_files(Layer.GOLD, dataset)
+                typer.echo(
+                    f"gold/{dataset:<17} files={len(files):<4} bytes={sum(file.size_bytes for file in files):,}"
+                )
+            for name, count in store.view_counts().items():
+                typer.secho(f"{name:<22} rows={count}", fg=typer.colors.GREEN)
+            typer.echo(
+                f"embedding_version={store.embedding_version} backlog={store.embedding_backlog().num_rows} coverage={store.coverage_ratio():.3f}"
+            )
     except AKLError as exc:
         _fail(exc)

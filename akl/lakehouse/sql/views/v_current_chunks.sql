@@ -10,6 +10,7 @@ WITH latest AS (
 SELECT l.*
 FROM latest AS l
 JOIN v_current_documents AS d
-  ON d.document_version_id = l.document_version_id
+  ON d.document_id = l.document_id
+ AND d.document_version_id = l.document_version_id
 WHERE l.is_current
   AND NOT l.is_deleted
