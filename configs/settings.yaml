@@ -1,0 +1,31 @@
+core:
+  env: dev
+  service_name: akl-api
+  log_level: INFO
+  org_name: Example Org
+  config_dir: configs
+  models_dir: /models
+  tmp_dir: /tmp/akl
+
+database:
+  host: postgres
+  port: 5432
+  name: akl
+  user: akl_pipeline
+  pool_min: 5
+  pool_max: 20
+  sslmode: disable
+
+s3:
+  endpoint: http://minio:9000
+  region: us-east-1
+  bucket: akl-lakehouse
+  use_ssl: false
+  path_style: true
+
+qdrant:
+  url: http://qdrant:6333
+  grpc_port: 6334
+  prefer_grpc: true
+  collection_alias: kb_chunks
+  collection: kb_chunks_v1
