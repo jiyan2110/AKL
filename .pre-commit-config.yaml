@@ -35,6 +35,9 @@ repos:
           - "structlog>=24.4"
           - "typer>=0.12"
           - "types-PyYAML"
+          - "sqlalchemy>=2.0.35"
+          - "alembic>=1.13"
+          - "psycopg[binary,pool]>=3.2"
 
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.35.1
