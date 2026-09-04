@@ -82,29 +82,49 @@ test-api: ## API contract tests
 # ----------------------------------------------------------------------------
 # Docker Compose stack
 # ----------------------------------------------------------------------------
+.PHONY: env
+env: ## Create .env from .env.example if missing
+	@if [ ! -f .env ]; then cp .env.example .env && echo "Created .env from .env.example — review the passwords."; else echo ".env exists"; fi
+
 .PHONY: up
-up: ## Start the dev stack
-	$(call not_yet,up,2)
+up: env ## Start the dev stack (detached)
+	$(COMPOSE_DEV) up -d --remove-orphans
 
 .PHONY: down
 down: ## Stop the stack, keep volumes
-	$(call not_yet,down,2)
+	$(COMPOSE_DEV) down --remove-orphans
 
 .PHONY: nuke
 nuke: ## Stop the stack and delete volumes (destroys all data)
-	$(call not_yet,nuke,2)
+	@read -r -p "This deletes ALL local data volumes. Type 'yes' to continue: " ans; [ "$$ans" = "yes" ]
+	$(COMPOSE_DEV) down --volumes --remove-orphans
 
 .PHONY: logs
-logs: ## Tail stack logs
-	$(call not_yet,logs,2)
-
-.PHONY: wait
-wait: ## Wait until all services are healthy
-	$(call not_yet,wait,2)
+logs: ## Tail stack logs (SERVICE=name to filter)
+	$(COMPOSE_DEV) logs -f --tail=200 $(SERVICE)
 
 .PHONY: ps
-ps: ## Show container status
-	$(call not_yet,ps,2)
+ps: ## Show container status and health
+	$(COMPOSE_DEV) ps
+
+WAIT_TIMEOUT ?= 180
+.PHONY: wait
+wait: ## Wait until postgres, minio, qdrant are healthy and minio-init succeeded
+	@echo "Waiting up to $(WAIT_TIMEOUT)s for services..."
+	@deadline=$$(( $$(date +%s) + $(WAIT_TIMEOUT) )); \
+	for c in akl-postgres akl-minio akl-qdrant; do \
+	  until [ "$$(docker inspect -f '{{.State.Health.Status}}' $$c 2>/dev/null)" = "healthy" ]; do \
+	    if [ $$(date +%s) -ge $$deadline ]; then echo "TIMEOUT waiting for $$c"; docker inspect -f '{{json .State.Health}}' $$c; exit 1; fi; \
+	    printf '.'; sleep 3; \
+	  done; echo " $$c healthy"; \
+	done; \
+	until [ "$$(docker inspect -f '{{.State.Status}}' akl-minio-init 2>/dev/null)" = "exited" ]; do \
+	  if [ $$(date +%s) -ge $$deadline ]; then echo "TIMEOUT waiting for akl-minio-init"; exit 1; fi; \
+	  printf '.'; sleep 3; \
+	done; \
+	code=$$(docker inspect -f '{{.State.ExitCode}}' akl-minio-init); \
+	if [ "$$code" != "0" ]; then echo "akl-minio-init FAILED (exit $$code)"; docker logs akl-minio-init; exit 1; fi; \
+	echo " akl-minio-init ok"; echo "All services ready."
 
 # ----------------------------------------------------------------------------
 # Data & pipelines
