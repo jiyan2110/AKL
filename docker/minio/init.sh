@@ -21,12 +21,19 @@ done
 
 mc mb --ignore-existing "$ALIAS/$AKL_S3_BUCKET"
 mc version enable "$ALIAS/$AKL_S3_BUCKET"
-if ! mc ilm rule ls "$ALIAS/$AKL_S3_BUCKET" 2>/dev/null | grep -q "quarantine/"; then
+rules="$(mc ilm rule ls "$ALIAS/$AKL_S3_BUCKET" 2>/dev/null || true)"
+case "$rules" in
+  *quarantine/*) ;;
+  *)
   mc ilm rule add --prefix "quarantine/" --expire-days "$QUARANTINE_DAYS" "$ALIAS/$AKL_S3_BUCKET"
-fi
-if ! mc ilm rule ls "$ALIAS/$AKL_S3_BUCKET" 2>/dev/null | grep -q "backups/"; then
+  ;;
+esac
+case "$rules" in
+  *backups/*) ;;
+  *)
   mc ilm rule add --prefix "backups/" --expire-days "$BACKUP_DAYS" "$ALIAS/$AKL_S3_BUCKET"
-fi
+  ;;
+esac
 
 cat > /tmp/policy.json <<EOF
 {
