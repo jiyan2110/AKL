@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import typer
 
 from akl import __version__
+from akl.cli.chunk import chunk_app
 from akl.cli.db import db_app
 from akl.cli.ingest import ingest_app
 from akl.cli.lakehouse import lakehouse_app
@@ -28,6 +29,7 @@ app.add_typer(config_app, name="config")
 app.add_typer(lakehouse_app, name="lakehouse")
 app.add_typer(db_app, name="db")
 app.add_typer(ingest_app, name="ingest")
+app.add_typer(chunk_app, name="chunk")
 
 
 def _version_callback(value: bool) -> None:

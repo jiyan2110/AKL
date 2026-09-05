@@ -180,12 +180,42 @@ class LakehouseSettings(_SectionSettings):
     lakehouse_use_file_manifest: bool = False
 
 
+class ChunkingSettings(_SectionSettings):
+    """Chunking engine parameters (PRD §4.1, Appendix B.6). Env names match the PRD exactly."""
+
+    yaml_section: ClassVar[str] = "chunking"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    chunker_version: str = "1.0.0"
+    chunk_target_tokens: int = Field(default=320, ge=32)
+    chunk_max_tokens: int = Field(default=448, ge=64)
+    chunk_min_tokens: int = Field(default=64, ge=1)
+    chunk_overlap_tokens: int = Field(default=48, ge=0)
+    chunk_semantic_enabled: bool = True
+    chunk_semantic_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    chunk_code_max_tokens: int = Field(default=400, ge=64)
+    chunk_table_max_tokens: int = Field(default=400, ge=64)
+    chunk_context_prefix_tokens: int = Field(default=40, ge=0)
+    chunk_emit_section_parents: bool = False
+    chunk_quality_min: float = Field(default=0.30, ge=0.0, le=1.0)
+    doc_quality_min: float = Field(default=0.35, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> ChunkingSettings:
+        if not (self.chunk_min_tokens < self.chunk_target_tokens <= self.chunk_max_tokens):
+            raise ValueError("require chunk_min_tokens < chunk_target_tokens <= chunk_max_tokens")
+        if self.chunk_overlap_tokens >= self.chunk_target_tokens:
+            raise ValueError("chunk_overlap_tokens must be < chunk_target_tokens")
+        return self
+
+
 _SECTIONS: tuple[type[_SectionSettings], ...] = (
     CoreSettings,
     DatabaseSettings,
     S3Settings,
     QdrantSettings,
     LakehouseSettings,
+    ChunkingSettings,
 )
 
 
@@ -197,6 +227,7 @@ class Settings(BaseModel):
     s3: S3Settings
     qdrant: QdrantSettings
     lakehouse: LakehouseSettings
+    chunking: ChunkingSettings
     config_file: Path | None = None
 
     @model_validator(mode="after")
@@ -248,6 +279,7 @@ class Settings(BaseModel):
                 s3=sections["s3"],
                 qdrant=sections["qdrant"],
                 lakehouse=sections["lakehouse"],
+                chunking=sections["chunking"],
                 config_file=resolved_file if resolved_file.exists() else None,
             )
         except ValidationError as exc:

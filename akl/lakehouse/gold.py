@@ -62,12 +62,15 @@ class GoldStore:
         *,
         embedding_version: str = DEFAULT_EMBEDDING_VERSION,
         embedding_dim: int = DEFAULT_EMBEDDING_DIM,
+        view_params: Mapping[str, str] | None = None,
     ) -> None:
         self._io = io
         self._engine = engine
         self.embedding_version = embedding_version
         self.embedding_dim = embedding_dim
-        self._views = ViewRegistry(engine, io, params={"embedding_version": embedding_version})
+        self._views = ViewRegistry(
+            engine, io, params={**(view_params or {}), "embedding_version": embedding_version}
+        )
         self._views_ready = False
 
     def ensure_views(self, *, refresh: bool = False) -> None:

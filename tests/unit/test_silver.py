@@ -81,7 +81,7 @@ def chunk_row(
 
 
 def test_schema_shapes() -> None:
-    assert len(DOCUMENTS.columns) == 30
+    assert len(DOCUMENTS.columns) == 31
     assert len(CHUNKS.columns) == 37
     assert DEDUP_LEDGER.partition_by == ()
     assert DOCUMENTS.partition_by == ("source_type", "ingest_date")

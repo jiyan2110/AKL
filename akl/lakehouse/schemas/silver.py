@@ -14,7 +14,7 @@ _ts = pa.timestamp("us", tz="UTC")
 
 DOCUMENTS = DatasetSchema(
     name="silver/documents",
-    version="1.0.0",
+    version="1.1.0",
     partition_by=("source_type", "ingest_date"),
     sort_by=("document_id", "parsed_at"),
     schema=pa.schema(
@@ -34,6 +34,7 @@ DOCUMENTS = DatasetSchema(
             pa.field("code_blocks", pa.string(), nullable=True),
             pa.field("images", pa.string(), nullable=True),
             pa.field("page_map", pa.string(), nullable=True),
+            pa.field("blocks", pa.string(), nullable=True),  # JSON block list (chunking input)
             pa.field("word_count", pa.int32(), nullable=False),
             pa.field("char_count", pa.int32(), nullable=False),
             pa.field("quality_score", pa.float32(), nullable=False),

@@ -31,6 +31,8 @@ dependencies = [
 	"selectolax>=0.3.21",
 	"httpx>=0.27",
 	"langdetect>=1.0.9",
+	"tokenizers>=0.20",
+	"pysbd>=0.3.4",
 ]
 
 [project.optional-dependencies]
@@ -104,7 +106,7 @@ module = ["akl.ingestion.parsers.pdf"]
 disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
-module = ["airflow.*", "duckdb.*", "qdrant_client.*", "rank_bm25.*", "fitz.*", "pdfplumber.*", "selectolax.*", "trafilatura.*", "markdown_it.*", "onnxruntime.*", "mlflow.*", "pyarrow.*", "boto3.*", "botocore.*", "pymupdf.*", "fitz.*", "selectolax.*", "langdetect.*", "mdit_py_plugins.*"]
+module = ["airflow.*", "duckdb.*", "qdrant_client.*", "rank_bm25.*", "fitz.*", "pdfplumber.*", "selectolax.*", "trafilatura.*", "markdown_it.*", "onnxruntime.*", "mlflow.*", "pyarrow.*", "boto3.*", "botocore.*", "pymupdf.*", "fitz.*", "selectolax.*", "langdetect.*", "mdit_py_plugins.*", "tokenizers.*", "pysbd.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,10 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+filterwarnings = [
+	"ignore::SyntaxWarning:pysbd.*",
+	"ignore:invalid escape sequence:SyntaxWarning",
+]
 markers = [
 	"unit: pure unit tests, no external services",
 	"component: one module against a real dependency (Postgres/MinIO/Qdrant)",

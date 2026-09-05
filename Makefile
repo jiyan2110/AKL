@@ -130,9 +130,10 @@ wait: ## Wait until postgres, minio, qdrant are healthy and minio-init succeeded
 # Data & pipelines
 # ----------------------------------------------------------------------------
 .PHONY: seed
-seed: ## Ingest the example corpus (markdown + pdf inbox) and show Silver status
+seed: ## Ingest the example corpus, chunk it, refresh Gold and show stats
 	$(UV) run akl-cli ingest run
-	$(UV) run akl-cli lakehouse silver-status
+	$(UV) run akl-cli chunk run
+	$(UV) run akl-cli chunk stats
 
 .PHONY: pipeline
 pipeline: ## Run the five DAGs sequentially via CLI

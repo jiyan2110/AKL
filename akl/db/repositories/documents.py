@@ -97,6 +97,14 @@ class DocumentRepository(Repository):
             .returning(DocumentVersion.document_version_id)
         )
         version_created = self.session.execute(ver_stmt).scalar_one_or_none() is not None
+        if version_created and parser_version == "":
+            # A new raw fetch (parser_version "" = fetch record) re-enters the parse backlog:
+            # the document has new content and its current Silver version is now stale (PRD §3.7).
+            self.session.execute(
+                update(Document)
+                .where(Document.document_id == document_id, Document.status != "bronze")
+                .values(status="bronze", updated_at=func.now())
+            )
         return BronzeRecordResult(document_id, version_id, document_created, version_created)
 
     def mark_parsed(

@@ -18,7 +18,11 @@ VIEWS_DIR = SQL_DIR / "views"
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 DatasetRef = tuple[Layer, str, DatasetSchema]
 SourceResolver = Callable[[Layer, str, DatasetSchema], str]
-DEFAULT_PARAMS: dict[str, str] = {"embedding_version": DEFAULT_EMBEDDING_VERSION}
+DEFAULT_PARAMS: dict[str, str] = {
+    "embedding_version": DEFAULT_EMBEDDING_VERSION,
+    "chunker_version": "*",  # "*" = any; ChunkingService/GoldStore pass the active version (PRD §2.9)
+    "chunk_config_hash": "*",
+}
 
 
 @dataclass(frozen=True)

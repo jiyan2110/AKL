@@ -14,3 +14,5 @@ JOIN v_current_documents AS d
  AND d.document_version_id = l.document_version_id
 WHERE l.is_current
   AND NOT l.is_deleted
+  AND ('{{ chunker_version }}' = '*' OR l.chunker_version = '{{ chunker_version }}')
+  AND ('{{ chunk_config_hash }}' = '*' OR l.chunk_config_hash = '{{ chunk_config_hash }}')

@@ -25,10 +25,12 @@ def _sql_in(values: Iterable[str]) -> str:
 
 
 class SilverStore:
-    def __init__(self, io: LakehouseIO, engine: QueryEngine) -> None:
+    def __init__(
+        self, io: LakehouseIO, engine: QueryEngine, *, view_params: Mapping[str, str] | None = None
+    ) -> None:
         self._io = io
         self._engine = engine
-        self._views = ViewRegistry(engine, io)
+        self._views = ViewRegistry(engine, io, params=view_params)
         self._views_ready = False
 
     def ensure_views(self, *, refresh: bool = False) -> None:

@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from akl import ids
 
@@ -265,6 +265,7 @@ class UnifiedDocument(_Frozen):
             "code_blocks": json.dumps(self.code_blocks, ensure_ascii=False),
             "images": json.dumps(self.images, ensure_ascii=False),
             "page_map": json.dumps(list(self.page_map), ensure_ascii=False),
+            "blocks": json.dumps([b.model_dump() for b in self.blocks], ensure_ascii=False),
             "word_count": len(self.text.split()),
             "char_count": len(self.text),
             "quality_score": float(self.quality.score),
@@ -281,3 +282,43 @@ class UnifiedDocument(_Frozen):
             "is_deleted": False,
             "ingest_date": parsed.date(),
         }
+
+
+_BLOCKS_ADAPTER: TypeAdapter[list[Block]] = TypeAdapter(list[Block])
+
+
+def document_from_silver_row(row: dict[str, Any]) -> UnifiedDocument:
+    """Rebuild a UnifiedDocument from a ``silver/documents`` row that carries ``blocks``.
+
+    Raises ``KeyError`` when the row predates schema 1.1.0 (no ``blocks``); callers
+    then re-parse from Bronze.
+    """
+    if not row.get("blocks"):
+        raise KeyError("blocks")
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, list):
+        metadata = dict(metadata)
+    structure = [HeadingNode.model_validate(n) for n in json.loads(row.get("structure") or "[]")]
+    return UnifiedDocument(
+        document_id=uuid.UUID(str(row["document_id"])),
+        content_sha256=str(row["content_sha256"]),
+        source_type=row["source_type"],
+        source_uri=str(row.get("source_uri") or row["canonical_source_uri"]),
+        canonical_source_uri=str(row["canonical_source_uri"]),
+        title=row.get("title"),
+        language=row.get("language"),
+        text=str(row["text"]),
+        blocks=tuple(_BLOCKS_ADAPTER.validate_json(row["blocks"])),
+        structure=tuple(structure),
+        page_map=tuple(json.loads(row.get("page_map") or "[]")),
+        quality=QualityReport(
+            score=float(row.get("quality_score") or 1.0),
+            flags=tuple(row.get("quality_flags") or ()),
+        ),
+        fingerprint_simhash=row.get("fingerprint_simhash"),
+        security_level=row.get("security_level") or "internal",
+        allowed_groups=tuple(row.get("allowed_groups") or ()),
+        metadata={str(k): str(v) for k, v in metadata.items()},
+        parser_name=str(row.get("parser_name") or ""),
+        parser_version=str(row.get("parser_version") or ""),
+    )
