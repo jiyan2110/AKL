@@ -257,7 +257,9 @@ class RetrievalSettings(_SectionSettings):
     rag_top_k: int = Field(default=8, ge=1)
     rag_min_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
     rag_min_candidates: int = Field(default=2, ge=1)
-    rag_strong_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
+    rag_strong_confidence: float = Field(
+        default=0.6, ge=0.0, le=1.0
+    )  # above this, one candidate suffices
     qdrant_hnsw_ef: int = Field(default=128, ge=8)
     rerank_enabled: bool = True
     rerank_model_id: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -273,6 +275,60 @@ class RetrievalSettings(_SectionSettings):
     bm25_b: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
+class ApiSettings(_SectionSettings):
+    """FastAPI gateway and authentication (PRD §10, Appendix B.10)."""
+
+    yaml_section: ClassVar[str] = "api"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    api_host: str = "0.0.0.0"  # noqa: S104 - container bind address
+    api_port: int = Field(default=8000, ge=1, le=65535)
+    api_workers: int = Field(default=2, ge=1)
+    openapi_enabled: bool = True
+    cors_origins: str = ""  # comma-separated
+    auth_disabled: bool = False  # honoured only when AKL_ENV=dev
+    jwt_secret: SecretStr | None = (
+        None  # HS256 shared secret (dev/MVP); JWKS/RS256 is Enterprise Scale
+    )
+    jwt_issuer: str = "akl-local"
+    jwt_audience: str = "akl-api"
+    jwt_ttl_s: int = Field(default=3600, ge=60)
+    api_key_prefix: str = "akl_"
+    api_key_pepper: SecretStr | None = None
+    rate_limit_rpm: int = Field(default=120, ge=1)
+    rate_limit_chat_rpm: int = Field(default=30, ge=1)
+    max_upload_mb: int = Field(default=50, ge=1)
+    store_query_text: bool = False
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+class LLMSettings(_SectionSettings):
+    """Generation model (PRD §0.8 A1, Appendix B.9). ``none`` → extractive answers (ADR-010)."""
+
+    yaml_section: ClassVar[str] = "llm"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    llm_provider: str = "none"  # none | openai_compat
+    llm_base_url: str = "http://host.docker.internal:11434/v1"
+    llm_api_key: SecretStr | None = None
+    llm_model: str = ""
+    llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    llm_max_input_tokens: int = Field(default=6000, ge=500)
+    llm_max_output_tokens: int = Field(default=800, ge=16)
+    llm_timeout_s: float = Field(default=60.0, gt=0)
+    llm_price_input_per_1k: float = Field(default=0.0, ge=0.0)
+    llm_price_output_per_1k: float = Field(default=0.0, ge=0.0)
+    rag_history_turns: int = Field(default=3, ge=0)
+    rag_summary_trigger_tokens: int = Field(default=1500, ge=100)
+    rag_max_uncited_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    rag_strict: bool = False
+    conversation_ttl_days: int = Field(default=30, ge=1)
+    prompt_version: str = "answer_v1"
+
+
 _SECTIONS: tuple[type[_SectionSettings], ...] = (
     CoreSettings,
     DatabaseSettings,
@@ -282,6 +338,8 @@ _SECTIONS: tuple[type[_SectionSettings], ...] = (
     ChunkingSettings,
     EmbeddingSettings,
     RetrievalSettings,
+    ApiSettings,
+    LLMSettings,
 )
 
 
@@ -296,12 +354,24 @@ class Settings(BaseModel):
     chunking: ChunkingSettings
     embedding: EmbeddingSettings
     retrieval: RetrievalSettings
+    api: ApiSettings
+    llm: LLMSettings
     config_file: Path | None = None
 
     @model_validator(mode="after")
     def _cross_section_rules(self) -> Settings:
         if self.core.env is Environment.PROD and self.db.sslmode is SSLMode.DISABLE:
             raise ValueError("AKL_DB_SSLMODE must not be 'disable' when AKL_ENV=prod")
+        if self.api.auth_disabled and self.core.env is not Environment.DEV:
+            raise ValueError("AKL_AUTH_DISABLED=true is only permitted when AKL_ENV=dev")
+        if (
+            not self.api.auth_disabled
+            and self.api.jwt_secret is None
+            and self.core.env is not Environment.DEV
+        ):
+            raise ValueError(
+                "AKL_JWT_SECRET is required when authentication is enabled outside dev"
+            )
         return self
 
     @classmethod
@@ -350,6 +420,8 @@ class Settings(BaseModel):
                 chunking=sections["chunking"],
                 embedding=sections["embedding"],
                 retrieval=sections["retrieval"],
+                api=sections["api"],
+                llm=sections["llm"],
                 config_file=resolved_file if resolved_file.exists() else None,
             )
         except ValidationError as exc:

@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 import typer
 
 from akl import __version__
+from akl.cli.api import api_app
+from akl.cli.auth import auth_app
 from akl.cli.chunk import chunk_app
 from akl.cli.db import db_app
 from akl.cli.embed import embed_app
@@ -38,6 +40,8 @@ app.add_typer(embed_app, name="embed")
 app.add_typer(qdrant_app, name="qdrant")
 app.add_typer(query_app, name="query")
 app.add_typer(bm25_app, name="bm25")
+app.add_typer(api_app, name="api")
+app.add_typer(auth_app, name="auth")
 app.command("search")(search_command)
 app.command("ask")(ask_command)
 

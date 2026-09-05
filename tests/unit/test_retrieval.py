@@ -137,6 +137,9 @@ class FakeIO:
     def object_exists(self, key: str) -> bool:
         return key in self.objects
 
+    def list_keys(self, prefix: str) -> list[str]:
+        return [key for key in self.objects if key.startswith(prefix)]
+
 
 class FakeQdrant:
     """Stands in for QdrantReconciler.search using an in-memory Qdrant client."""

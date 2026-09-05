@@ -38,6 +38,11 @@ dependencies = [
 	"huggingface-hub>=0.24",
 	"qdrant-client>=1.12",
 	"rank-bm25>=0.2.2",
+	"fastapi>=0.115",
+	"uvicorn[standard]>=0.30",
+	"python-multipart>=0.0.9",
+	"pyjwt>=2.9",
+	"prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -85,6 +90,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PT011"]
 "airflow/dags/**" = ["N"]
+"akl/api/schemas/common.py" = ["UP046"]  # pydantic Generic[T] models (PEP 695 syntax not supported by the pydantic mypy plugin)
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom calls these in argument defaults by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.File", "fastapi.Form", "fastapi.Body", "akl.api.deps.scoped", "akl.api.deps.rate_limited"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["akl", "akl_airflow"]
@@ -125,6 +135,9 @@ filterwarnings = [
 	"ignore::SyntaxWarning:pysbd.*",
 	"ignore:invalid escape sequence:SyntaxWarning",
 	"ignore:Payload indexes have no effect in the local Qdrant:UserWarning",
+	"ignore::DeprecationWarning:starlette.testclient",
+	"ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning",
+	"ignore::DeprecationWarning:fastapi.testclient",
 ]
 markers = [
 	"unit: pure unit tests, no external services",

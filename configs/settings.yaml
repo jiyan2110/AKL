@@ -61,6 +61,7 @@ retrieval:
   rag_top_k: 8
   rag_min_confidence: 0.35
   rag_min_candidates: 2
+  rag_strong_confidence: 0.6
   qdrant_hnsw_ef: 128
   rerank_enabled: true
   rerank_model_id: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -74,3 +75,31 @@ retrieval:
   rag_marginal_penalty: 0.9
   bm25_k1: 1.5
   bm25_b: 0.75
+
+api:
+  api_host: 0.0.0.0
+  api_port: 8000
+  api_workers: 2
+  openapi_enabled: true
+  auth_disabled: false        # dev only; set AKL_AUTH_DISABLED=true in .env for local use
+  jwt_issuer: akl-local
+  jwt_audience: akl-api
+  jwt_ttl_s: 3600
+  rate_limit_rpm: 120
+  rate_limit_chat_rpm: 30
+  max_upload_mb: 50
+
+llm:
+  llm_provider: none          # none (extractive answers) | openai_compat
+  llm_base_url: http://host.docker.internal:11434/v1
+  llm_model: ""
+  llm_temperature: 0.1
+  llm_max_input_tokens: 6000
+  llm_max_output_tokens: 800
+  llm_timeout_s: 60
+  rag_history_turns: 3
+  rag_summary_trigger_tokens: 1500
+  rag_max_uncited_ratio: 0.2
+  rag_strict: false
+  conversation_ttl_days: 30
+  prompt_version: answer_v1

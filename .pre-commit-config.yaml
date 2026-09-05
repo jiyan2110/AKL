@@ -17,12 +17,19 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+  # Ruff runs from the project venv (uv) so hook and `make lint` always use the same version.
+  - repo: local
     hooks:
       - id: ruff
-        args: ["--fix"]
+        name: ruff (uv run)
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
       - id: ruff-format
+        name: ruff format (uv run)
+        entry: uv run ruff format
+        language: system
+        types: [python]
 
   # mypy runs from the project venv (uv) so it always sees the real dependency set.
   - repo: local

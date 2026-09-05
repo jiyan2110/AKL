@@ -143,8 +143,11 @@ pipeline: ## Run the five DAGs sequentially via CLI
 	$(call not_yet,pipeline,42)
 
 .PHONY: token
-token: ## Mint a development JWT
-	$(call not_yet,token,31)
+token: ## Mint a development JWT (needs AKL_JWT_SECRET)
+	$(UV) run akl-cli auth mint-token --user dev --groups eng --levels public,internal,restricted --roles admin
+
+api: ## Run the FastAPI gateway locally (http://localhost:8000/docs)
+	$(UV) run akl-cli api serve --reload
 
 .PHONY: query
 query: ## Hybrid search: make query Q="..."
