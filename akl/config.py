@@ -161,6 +161,12 @@ class QdrantSettings(_SectionSettings):
     api_key: SecretStr | None = None
     collection_alias: str = "kb_chunks"
     collection: str = "kb_chunks_v1"
+    hnsw_m: int = Field(default=16, ge=4)
+    hnsw_ef_construct: int = Field(default=128, ge=8)
+    on_disk_payload: bool = True
+    upsert_batch: int = Field(default=512, ge=1)
+    delete_batch: int = Field(default=1000, ge=1)
+    scroll_page: int = Field(default=10000, ge=100)
 
 
 class ParquetCompression(StrEnum):
@@ -209,6 +215,53 @@ class ChunkingSettings(_SectionSettings):
         return self
 
 
+class EmbeddingSettings(_SectionSettings):
+    """Embedding model and batching (PRD §5, Appendix B.5). Env names match the PRD."""
+
+    yaml_section: ClassVar[str] = "embedding"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    embed_provider: str = "bge"  # bge (ONNX) | hash (deterministic, offline/testing)
+    embed_model_id: str = "BAAI/bge-small-en-v1.5"
+    embed_model_version: str = "1.5"
+    embed_model_sha256: str | None = None
+    embed_dim: int = Field(default=384, ge=8)
+    embed_device: str = "auto"
+    embed_batch_size: int = Field(default=64, ge=1)
+    embed_threads: int = Field(default=0, ge=0)  # 0 = onnxruntime default
+    embed_onnx_int8: bool = False
+    embed_query_instruction: str = "Represent this sentence for searching relevant passages: "
+    embed_task_shards: int = Field(default=4, ge=1)
+    embedding_cache_ttl_days: int = Field(default=180, ge=1)
+    embedding_retire_days: int = Field(default=30, ge=1)
+    embedder_version: str = "1.0.0"
+
+    @property
+    def embedding_version(self) -> str:
+        slug = self.embed_model_id.split("/")[-1]
+        return f"{slug}__{self.embed_model_version}__{self.embed_dim}"
+
+
+class RetrievalSettings(_SectionSettings):
+    """Query processing and retrieval parameters (PRD §6, Appendix B.8)."""
+
+    yaml_section: ClassVar[str] = "retrieval"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    query_max_chars: int = Field(default=2000, ge=1)
+    query_spell_dual: bool = True
+    retrieval_dense_k: int = Field(default=50, ge=1)
+    retrieval_sparse_k: int = Field(default=50, ge=1)
+    retrieval_fused_k: int = Field(default=40, ge=1)
+    rrf_k: int = Field(default=60, ge=1)
+    rag_top_k: int = Field(default=8, ge=1)
+    rag_min_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    rag_min_candidates: int = Field(default=2, ge=1)
+    qdrant_hnsw_ef: int = Field(default=128, ge=8)
+    rerank_enabled: bool = True
+    rerank_model_id: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+
 _SECTIONS: tuple[type[_SectionSettings], ...] = (
     CoreSettings,
     DatabaseSettings,
@@ -216,6 +269,8 @@ _SECTIONS: tuple[type[_SectionSettings], ...] = (
     QdrantSettings,
     LakehouseSettings,
     ChunkingSettings,
+    EmbeddingSettings,
+    RetrievalSettings,
 )
 
 
@@ -228,6 +283,8 @@ class Settings(BaseModel):
     qdrant: QdrantSettings
     lakehouse: LakehouseSettings
     chunking: ChunkingSettings
+    embedding: EmbeddingSettings
+    retrieval: RetrievalSettings
     config_file: Path | None = None
 
     @model_validator(mode="after")
@@ -280,6 +337,8 @@ class Settings(BaseModel):
                 qdrant=sections["qdrant"],
                 lakehouse=sections["lakehouse"],
                 chunking=sections["chunking"],
+                embedding=sections["embedding"],
+                retrieval=sections["retrieval"],
                 config_file=resolved_file if resolved_file.exists() else None,
             )
         except ValidationError as exc:

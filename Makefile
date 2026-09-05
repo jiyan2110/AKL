@@ -130,10 +130,12 @@ wait: ## Wait until postgres, minio, qdrant are healthy and minio-init succeeded
 # Data & pipelines
 # ----------------------------------------------------------------------------
 .PHONY: seed
-seed: ## Ingest the example corpus, chunk it, refresh Gold and show stats
+seed: ## Ingest → chunk → Gold → embed → Qdrant sync (full offline pipeline)
 	$(UV) run akl-cli ingest run
 	$(UV) run akl-cli chunk run
-	$(UV) run akl-cli chunk stats
+	$(UV) run akl-cli embed run
+	$(UV) run akl-cli qdrant sync
+	$(UV) run akl-cli embed status
 
 .PHONY: pipeline
 pipeline: ## Run the five DAGs sequentially via CLI
@@ -144,8 +146,8 @@ token: ## Mint a development JWT
 	$(call not_yet,token,31)
 
 .PHONY: query
-query: ## Ask a question: make query Q="..."
-	$(call not_yet,query,34)
+query: ## Dense search: make query Q="..."
+	$(UV) run akl-cli qdrant search "$(Q)"
 
 .PHONY: bench
 bench: ## Run benchmark harness

@@ -16,8 +16,11 @@ import typer
 from akl import __version__
 from akl.cli.chunk import chunk_app
 from akl.cli.db import db_app
+from akl.cli.embed import embed_app
 from akl.cli.ingest import ingest_app
 from akl.cli.lakehouse import lakehouse_app
+from akl.cli.qdrant import qdrant_app
+from akl.cli.query import query_app
 from akl.config import Settings
 from akl.errors import AKLError
 
@@ -30,6 +33,9 @@ app.add_typer(lakehouse_app, name="lakehouse")
 app.add_typer(db_app, name="db")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(chunk_app, name="chunk")
+app.add_typer(embed_app, name="embed")
+app.add_typer(qdrant_app, name="qdrant")
+app.add_typer(query_app, name="query")
 
 
 def _version_callback(value: bool) -> None:

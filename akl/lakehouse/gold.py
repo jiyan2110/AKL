@@ -78,6 +78,10 @@ class GoldStore:
             self._views.register_all()
             self._views_ready = True
 
+    def dataset_source(self, dataset: str, schema: DatasetSchema) -> str:
+        """SQL expression backing a Gold dataset (glob or empty table) for ad-hoc joins."""
+        return self._views.resolver(Layer.GOLD, dataset, schema)
+
     def view_counts(self) -> dict[str, int]:
         self.ensure_views(refresh=True)
         return self._views.counts()

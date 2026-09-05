@@ -33,6 +33,10 @@ dependencies = [
 	"langdetect>=1.0.9",
 	"tokenizers>=0.20",
 	"pysbd>=0.3.4",
+	"numpy>=1.26",
+	"onnxruntime>=1.18",
+	"huggingface-hub>=0.24",
+	"qdrant-client>=1.12",
 ]
 
 [project.optional-dependencies]
@@ -106,7 +110,7 @@ module = ["akl.ingestion.parsers.pdf"]
 disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
-module = ["airflow.*", "duckdb.*", "qdrant_client.*", "rank_bm25.*", "fitz.*", "pdfplumber.*", "selectolax.*", "trafilatura.*", "markdown_it.*", "onnxruntime.*", "mlflow.*", "pyarrow.*", "boto3.*", "botocore.*", "pymupdf.*", "fitz.*", "selectolax.*", "langdetect.*", "mdit_py_plugins.*", "tokenizers.*", "pysbd.*"]
+module = ["airflow.*", "duckdb.*", "qdrant_client.*", "rank_bm25.*", "fitz.*", "pdfplumber.*", "selectolax.*", "trafilatura.*", "markdown_it.*", "onnxruntime.*", "mlflow.*", "pyarrow.*", "boto3.*", "botocore.*", "pymupdf.*", "fitz.*", "selectolax.*", "langdetect.*", "mdit_py_plugins.*", "tokenizers.*", "pysbd.*", "onnxruntime.*", "huggingface_hub.*", "numpy.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
@@ -119,6 +123,7 @@ addopts = "-ra --strict-markers"
 filterwarnings = [
 	"ignore::SyntaxWarning:pysbd.*",
 	"ignore:invalid escape sequence:SyntaxWarning",
+	"ignore:Payload indexes have no effect in the local Qdrant:UserWarning",
 ]
 markers = [
 	"unit: pure unit tests, no external services",
