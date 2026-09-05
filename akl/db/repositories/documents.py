@@ -155,7 +155,7 @@ class DocumentRepository(Repository):
         stmt = (
             select(Document)
             .where(Document.status == status)
-            .order_by(Document.updated_at)
+            .order_by(Document.updated_at, Document.canonical_source_uri)
             .limit(limit)
         )
         return list(self.session.scalars(stmt))

@@ -1,0 +1,12 @@
+# GitHub connector example (PRD §3.3.4). Disabled by default — set owner/repo/branch and
+# export AKL_GITHUB_TOKEN (or AKL_GITHUB_TOKEN_FILE), then enabled: true.
+id: github-example
+type: github
+enabled: false
+owner: your-org
+repo: your-docs-repo
+branch: main
+include_globs: ["**/*.md", "docs/**"]
+include_code: false
+security_level: internal
+mode: auto

@@ -24,20 +24,15 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.2
+  # mypy runs from the project venv (uv) so it always sees the real dependency set.
+  - repo: local
     hooks:
       - id: mypy
-        files: ^akl/
-        additional_dependencies:
-          - "pydantic>=2.8"
-          - "pydantic-settings>=2.4"
-          - "structlog>=24.4"
-          - "typer>=0.12"
-          - "types-PyYAML"
-          - "sqlalchemy>=2.0.35"
-          - "alembic>=1.13"
-          - "psycopg[binary,pool]>=3.2"
+        name: mypy (uv run)
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        types: [python]
 
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.35.1

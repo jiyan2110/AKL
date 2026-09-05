@@ -15,6 +15,7 @@ import typer
 
 from akl import __version__
 from akl.cli.db import db_app
+from akl.cli.ingest import ingest_app
 from akl.cli.lakehouse import lakehouse_app
 from akl.config import Settings
 from akl.errors import AKLError
@@ -26,6 +27,7 @@ config_app = typer.Typer(help="Inspect and validate configuration.", no_args_is_
 app.add_typer(config_app, name="config")
 app.add_typer(lakehouse_app, name="lakehouse")
 app.add_typer(db_app, name="db")
+app.add_typer(ingest_app, name="ingest")
 
 
 def _version_callback(value: bool) -> None:

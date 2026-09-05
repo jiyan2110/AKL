@@ -6,7 +6,7 @@ import fnmatch
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -157,15 +157,27 @@ class BaseConnector(ABC):
 # Runner (Bronze write flow, PRD §3.7)
 # ---------------------------------------------------------------------------
 class RawPutLike(Protocol):
-    object_key: str
-    content_sha256: str
-    size_bytes: int
-    deduplicated: bool
+    @property
+    def object_key(self) -> str: ...
+
+    @property
+    def content_sha256(self) -> str: ...
+
+    @property
+    def size_bytes(self) -> int: ...
+
+    @property
+    def deduplicated(self) -> bool: ...
 
 
 class BronzeSink(Protocol):
     def put_raw(
-        self, data: bytes, *, source_type: str, mime_type: str | None, filename: str | None
+        self,
+        data: bytes,
+        *,
+        source_type: str,
+        mime_type: str | None = None,
+        filename: str | None = None,
     ) -> RawPutLike: ...
 
     @staticmethod
@@ -249,10 +261,11 @@ class ConnectorRunner:
             if cfg.max_items_per_run is None or len(to_fetch) < cfg.max_items_per_run:
                 to_fetch.append(event)
 
+        # Fetch concurrently but COMMIT in discovery order so Bronze/Postgres/manifest
+        # ordering is deterministic across runs (matters for dedup tie-breaks and audits).
         with ThreadPoolExecutor(max_workers=cfg.fetch_concurrency) as pool:
-            futures = {pool.submit(connector.fetch_with_retry, item): item for item in to_fetch}
-            for future in as_completed(futures):
-                item = futures[future]
+            futures = [(item, pool.submit(connector.fetch_with_retry, item)) for item in to_fetch]
+            for item, future in futures:
                 try:
                     fetched = future.result()
                 except AKLError as exc:

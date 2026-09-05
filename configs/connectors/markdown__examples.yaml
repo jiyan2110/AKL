@@ -1,0 +1,14 @@
+# Markdown connector: the repository's example corpus (PRD §3.3.2). Used by `make seed`.
+id: markdown-examples
+type: markdown
+enabled: true
+root_path: examples/docs
+uri_base: https://docs.example.internal/examples
+security_level: internal
+owners: [platform-team]
+include_globs: ["**/*.md", "**/*.mdx"]
+exclude_globs: ["**/drafts/**"]
+path_rules:
+  - glob: "public/*"
+    security_level: public
+fetch_concurrency: 4

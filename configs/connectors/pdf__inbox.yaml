@@ -1,0 +1,9 @@
+# PDF inbox connector (PRD §3.3.1): drop PDFs into examples/pdf-inbox (or a mounted volume).
+id: pdf-inbox
+type: pdf
+enabled: true
+root_path: examples/pdf-inbox
+uri_base: https://docs.example.internal/pdf
+security_level: internal
+owners: [platform-team]
+fetch_concurrency: 2

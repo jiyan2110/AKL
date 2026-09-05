@@ -1,0 +1,10 @@
+# HTML connector example (PRD §3.3.3). Disabled by default — point it at an internal wiki
+# by setting sitemap_url or urls and enabled: true.
+id: html-example
+type: html
+enabled: false
+urls:
+  - https://docs.python.org/3/library/hashlib.html
+security_level: public
+requests_per_second: 1
+max_pages: 20
