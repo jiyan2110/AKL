@@ -1,0 +1,5 @@
+{
+  "akl_ingestion": {"slots": 4, "description": "concurrent connector fetches"},
+  "akl_embedding": {"slots": 1, "description": "embedding model instances (CPU)"},
+  "akl_qdrant": {"slots": 1, "description": "single reconciler at a time"}
+}

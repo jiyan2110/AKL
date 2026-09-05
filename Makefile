@@ -139,8 +139,28 @@ seed: ## Ingest → chunk → Gold → embed → Qdrant sync + BM25 (full offlin
 	$(UV) run akl-cli bm25 status
 
 .PHONY: pipeline
-pipeline: ## Run the five DAGs sequentially via CLI
-	$(call not_yet,pipeline,42)
+pipeline: ## Run the five pipeline stages sequentially via the task entrypoints the DAGs use (no Airflow needed)
+	$(UV) run akl-cli pipeline run-all
+
+.PHONY: airflow-build airflow-up airflow-down airflow-logs dags-test dags-unpause
+airflow-build: ## Build the Airflow image (Airflow 2.10 + isolated akl venv)
+	$(COMPOSE_DEV) build airflow-init
+
+airflow-up: ## Start Airflow (init → scheduler/webserver/triggerer); UI http://localhost:8080 (admin/admin)
+	$(COMPOSE_DEV) up -d airflow-init airflow-scheduler airflow-webserver airflow-triggerer
+
+airflow-down: ## Stop Airflow services (data services stay up)
+	$(COMPOSE_DEV) stop airflow-scheduler airflow-webserver airflow-triggerer
+
+airflow-logs: ## Tail scheduler logs
+	$(COMPOSE_DEV) logs -f --tail=200 airflow-scheduler
+
+dags-test: ## Import all DAGs inside the scheduler container, then run akl_ingestion once end-to-end
+	$(COMPOSE_DEV) exec airflow-scheduler python -c "from airflow.models import DagBag; b=DagBag('/opt/airflow/dags', include_examples=False); assert not b.import_errors, b.import_errors; print('DAGs OK:', sorted(b.dags))"
+	$(COMPOSE_DEV) exec airflow-scheduler airflow dags test akl_ingestion
+
+dags-unpause: ## Unpause all AKL DAGs
+	$(COMPOSE_DEV) exec airflow-scheduler bash -c 'for d in akl_ingestion akl_chunking akl_embedding akl_qdrant_sync akl_maintenance; do airflow dags unpause $$d; done'
 
 .PHONY: token
 token: ## Mint a development JWT (needs AKL_JWT_SECRET)

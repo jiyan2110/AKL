@@ -90,7 +90,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PT011"]
 "airflow/dags/**" = ["N"]
-"akl/api/schemas/common.py" = ["UP046"]  # pydantic Generic[T] models (PEP 695 syntax not supported by the pydantic mypy plugin)
+"akl/api/schemas/common.py" = ["UP046"]
+"akl/lakehouse/compaction.py" = ["S608"]  # object keys come from bucket listings, quoted per key
+"akl/lakehouse/io.py" = ["S608"]           # DuckDB COPY targets built from settings/paths (quoted)
+"akl/pipelines/maintenance.py" = ["S603"]  # pg_dump with a fixed argv list  # pydantic Generic[T] models (PEP 695 syntax not supported by the pydantic mypy plugin)
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection idiom calls these in argument defaults by design.
@@ -146,6 +149,7 @@ markers = [
 	"api: HTTP contract tests",
 	"eval: retrieval/RAG quality evaluation",
 	"slow: real model downloads or long-running",
+	"airflow: DAG integrity tests (need an Airflow installation; run via make dags-test or CI)",
 ]
 
 [tool.coverage.run]

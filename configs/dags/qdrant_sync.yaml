@@ -1,0 +1,14 @@
+# akl_qdrant_sync (PRD §7.6)
+dag_id: akl_qdrant_sync
+schedule: "45 * * * *"
+max_active_runs: 1
+retries: 3
+retry_delay_s: 60
+max_retry_delay_s: 600
+sla_minutes: 30
+api_url: http://akl-api:8000      # set to "" to skip the reload notification
+timeouts_s:
+  qdrant_health_sensor: 600
+  reconcile: 2700
+  rebuild_bm25_index: 1200
+  notify_api_reload: 120

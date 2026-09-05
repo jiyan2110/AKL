@@ -1,0 +1,14 @@
+# akl_chunking (PRD §7.4)
+dag_id: akl_chunking
+schedule: "15 * * * *"
+max_active_runs: 1
+retries: 2
+retry_delay_s: 120
+max_retry_delay_s: 1200
+sla_minutes: 30
+limit: 200
+gates:
+  max_failed_ratio: 0.3
+timeouts_s:
+  chunk_documents: 2700
+  quality_gate: 120

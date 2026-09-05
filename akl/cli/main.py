@@ -21,6 +21,7 @@ from akl.cli.db import db_app
 from akl.cli.embed import embed_app
 from akl.cli.ingest import ingest_app
 from akl.cli.lakehouse import lakehouse_app
+from akl.cli.pipeline import pipeline_app
 from akl.cli.qdrant import qdrant_app
 from akl.cli.query import query_app
 from akl.cli.search import ask_command, bm25_app, search_command
@@ -42,6 +43,7 @@ app.add_typer(query_app, name="query")
 app.add_typer(bm25_app, name="bm25")
 app.add_typer(api_app, name="api")
 app.add_typer(auth_app, name="auth")
+app.add_typer(pipeline_app, name="pipeline")
 app.command("search")(search_command)
 app.command("ask")(ask_command)
 

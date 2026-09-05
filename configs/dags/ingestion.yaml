@@ -1,0 +1,16 @@
+# akl_ingestion (PRD §7.3, Appendix C)
+dag_id: akl_ingestion
+schedule: "*/30 * * * *"
+max_active_runs: 1
+retries: 2
+retry_delay_s: 120
+max_retry_delay_s: 1200
+sla_minutes: 25
+parse_limit: 500
+gates:
+  max_quarantine_ratio: 0.25
+timeouts_s:
+  load_connector_configs: 60
+  fetch_to_bronze: 2700
+  parse_validate_to_silver: 3600
+  quality_gate: 120

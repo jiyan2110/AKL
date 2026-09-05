@@ -1,0 +1,20 @@
+# akl_maintenance (PRD §7.7)
+dag_id: akl_maintenance
+schedule: "0 2 * * *"
+max_active_runs: 1
+retries: 1
+retry_delay_s: 300
+max_retry_delay_s: 300
+sla_minutes: 90
+retention_days:
+  bronze: 365
+  quarantine: 90
+  backups: 14
+  embedding_versions: 30
+dry_run: false
+timeouts_s:
+  compact_partitions: 2700
+  retention: 900
+  compute_corpus_stats: 900
+  backup: 1800
+  vacuum_analyze: 900

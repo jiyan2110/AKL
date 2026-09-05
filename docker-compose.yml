@@ -6,6 +6,47 @@ x-healthcheck-defaults: &hc_defaults
   retries: 10
   start_period: 20s
 
+x-airflow-env: &airflow_env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__PARALLELISM: "8"
+  AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "8"
+  AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "120"
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:-akl-dev-webserver-key}
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+  AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "30"
+  AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+    postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow_dev_change_me}@postgres:5432/${AIRFLOW_DB_NAME:-airflow}
+  # akl settings for tasks (container network names; secrets come from .env)
+  AKL_ENV: ${AKL_ENV:-dev}
+  AKL_DB_HOST: postgres
+  AKL_DB_PORT: "5432"
+  AKL_DB_NAME: ${AKL_DB_NAME:-akl}
+  AKL_DB_USER: ${AKL_DB_PIPELINE_USER:-akl_pipeline}
+  AKL_DB_PASSWORD: ${AKL_DB_PIPELINE_PASSWORD:-${AKL_DB_PASSWORD:-}}
+  AKL_S3_ENDPOINT: http://minio:9000
+  AKL_S3_BUCKET: ${AKL_S3_BUCKET:-akl-lakehouse}
+  AKL_S3_ACCESS_KEY: ${AKL_S3_ACCESS_KEY:-}
+  AKL_S3_SECRET_KEY: ${AKL_S3_SECRET_KEY:-}
+  AKL_QDRANT_URL: http://qdrant:6333
+  AKL_MODELS_DIR: /models
+  AKL_CONFIG_DIR: /opt/akl/configs
+  AKL_JWT_SECRET: ${AKL_JWT_SECRET:-}
+  AKL_EMBED_PROVIDER: ${AKL_EMBED_PROVIDER:-bge}
+
+x-airflow-volumes: &airflow_volumes
+  - ./airflow/dags:/opt/airflow/dags:ro
+  - ./airflow/plugins:/opt/airflow/plugins:ro
+  - ./airflow/config:/opt/airflow/config:ro
+  - ./configs:/opt/akl/configs:ro
+  - ./configs/dags:/opt/airflow/configs/dags:ro
+  - ./akl:/opt/akl/akl:ro
+  - akl_airflow_logs:/opt/airflow/logs
+  - akl_models:/models
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -88,6 +129,71 @@ services:
       <<: *hc_defaults
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
 
+  # --------------------------------------------------------------------------- Airflow (PRD §7)
+  airflow-init:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    image: akl-airflow:local
+    container_name: akl-airflow-init
+    entrypoint: ["bash", "/opt/airflow/config/init.sh"]
+    environment:
+      <<: *airflow_env
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    volumes: *airflow_volumes
+    networks: [akl-data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-scheduler:
+    image: akl-airflow:local
+    container_name: akl-airflow-scheduler
+    command: scheduler
+    environment: *airflow_env
+    volumes: *airflow_volumes
+    networks: [akl-data]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\" || exit 1"]
+
+  airflow-webserver:
+    image: akl-airflow:local
+    container_name: akl-airflow-webserver
+    command: webserver
+    environment: *airflow_env
+    volumes: *airflow_volumes
+    networks: [akl-data, akl-edge]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+
+  airflow-triggerer:
+    image: akl-airflow:local
+    container_name: akl-airflow-triggerer
+    command: triggerer
+    environment: *airflow_env
+    volumes: *airflow_volumes
+    networks: [akl-data]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 networks:
   akl-edge:
     name: akl-edge
@@ -105,3 +211,7 @@ volumes:
     name: akl_qdrant_data
   akl_qdrant_snapshots:
     name: akl_qdrant_snapshots
+  akl_airflow_logs:
+    name: akl_airflow_logs
+  akl_models:
+    name: akl_models

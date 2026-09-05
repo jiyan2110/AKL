@@ -1,0 +1,15 @@
+# akl_embedding (PRD §7.5)
+dag_id: akl_embedding
+schedule: "30 * * * *"
+max_active_runs: 1
+retries: 2
+retry_delay_s: 180
+max_retry_delay_s: 1800
+sla_minutes: 60
+pool: akl_embedding
+gates:
+  min_coverage: 0.99
+timeouts_s:
+  warm_model_check: 600
+  embed_backlog: 5400
+  coverage_gate: 120

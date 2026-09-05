@@ -184,6 +184,8 @@ class LakehouseSettings(_SectionSettings):
     duckdb_memory_limit: str = "4GB"
     duckdb_threads: int = Field(default=4, ge=1)
     lakehouse_use_file_manifest: bool = False
+    compact_min_files: int = Field(default=8, ge=2)
+    compact_small_file_mb: int = Field(default=32, ge=1)
 
 
 class ChunkingSettings(_SectionSettings):

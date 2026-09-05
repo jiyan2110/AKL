@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -55,6 +57,25 @@ class WriteResult:
     rows: int
     files: tuple[str, ...]
     bytes_written: int
+
+
+def run_token(run_id: str) -> str:
+    """Deterministic object-key-safe form of any run id (Airflow ids contain ``: + .``).
+
+    Ids that are already ``[A-Za-z0-9_-]`` are returned unchanged (CLI/API ids, existing keys stay
+    identical). Anything else is mapped to ``_`` and gets a short hash suffix so distinct ids never
+    collapse onto the same token.
+    """
+    safe = re.sub(r"[^0-9A-Za-z_-]", "_", run_id)
+    if safe == run_id:
+        return run_id
+    digest = hashlib.blake2b(run_id.encode("utf-8"), digest_size=4).hexdigest()
+    return f"{safe[:48]}_{digest}"
+
+
+def run_ident(run_id: str) -> str:
+    """SQL-identifier-safe form (``[A-Za-z0-9_]`` only) for DuckDB view names."""
+    return run_token(run_id).replace("-", "_")
 
 
 def dataset_uri(bucket: str, layer: Layer | str, dataset: str) -> str:
@@ -133,14 +154,15 @@ class LakehouseIO:
                 raise LakehouseIOError(
                     f"column '{column}' not in table", details={"columns": table.column_names}
                 )
-        view = f"akl_write_{run_id.replace('-', '_')}"
+        token = run_token(run_id)
+        view = f"akl_write_{run_ident(run_id)}"
         target = self.uri(layer, dataset)
         order_clause = (
             f" ORDER BY {', '.join(_sql_ident(column) for column in sort_by)}" if sort_by else ""
         )
         compression = self._compression_clause()
         metadata = f"KV_METADATA {{ {_sql_str(SCHEMA_VERSION_KEY)}: {_sql_str(schema_version)} }}"
-        filename_pattern = f"FILENAME_PATTERN 'part-{run_id}-{{uuid}}'"
+        filename_pattern = f"FILENAME_PATTERN 'part-{token}-{{uuid}}'"
         if partition_by:
             destination = target
             part_clause = (
@@ -148,7 +170,7 @@ class LakehouseIO:
             )
             options = f"FORMAT PARQUET, {compression}, {part_clause}, APPEND true, {filename_pattern}, {metadata}"
         else:
-            destination = f"{target}/part-{run_id}-{uuid4().hex[:12]}.parquet"
+            destination = f"{target}/part-{token}-{uuid4().hex[:12]}.parquet"
             options = f"FORMAT PARQUET, {compression}, {metadata}"
         self._engine.register(view, table)
         try:
@@ -157,13 +179,32 @@ class LakehouseIO:
             )
         finally:
             self._engine.unregister(view)
-        files = [file for file in self.list_files(layer, dataset) if f"part-{run_id}-" in file.key]
+        files = [file for file in self.list_files(layer, dataset) if f"part-{token}-" in file.key]
         return WriteResult(
             self.uri(layer, dataset),
             table.num_rows,
             tuple(file.key for file in files),
             sum(file.size_bytes for file in files),
         )
+
+    def write_file(
+        self, table: pa.Table, layer: Layer | str, dataset: str, *, partition: str, run_id: str
+    ) -> str:
+        """Write ``table`` as ONE Parquet file inside ``<dataset>/<partition>/`` (compaction target)."""
+        token = run_token(run_id)
+        view = f"akl_writefile_{run_ident(run_id)}"
+        base = self.uri(layer, dataset)
+        target_dir = f"{base}/{partition.strip('/')}" if partition else base
+        destination = f"{target_dir}/part-{token}-{uuid4().hex[:12]}.parquet"
+        self._engine.register(view, table)
+        try:
+            self._engine.execute(
+                f"COPY (SELECT * FROM {view}) TO {_sql_str(destination)} "
+                f"(FORMAT PARQUET, {self._compression_clause()})"
+            )
+        finally:
+            self._engine.unregister(view)
+        return destination.split(f"s3://{self._bucket}/", 1)[1]
 
     def read(
         self,
@@ -210,7 +251,7 @@ class LakehouseIO:
             ) from exc
         return files
 
-    def delete_keys(self, keys: Sequence[str]) -> int:
+    def delete_keys(self, keys: Sequence[str], *, allow_bronze_raw: bool = False) -> int:
         forbidden = [key for key in keys if key.startswith("bronze/raw/")]
         if forbidden:
             raise LakehouseIOError(
@@ -228,6 +269,20 @@ class LakehouseIO:
         except (ClientError, BotoCoreError) as exc:
             raise LakehouseIOError("delete failed", details={"error": str(exc)}) from exc
         return deleted
+
+    def list_objects(self, prefix: str) -> list[FileInfo]:
+        """All objects under ``prefix`` with size and last-modified (any extension)."""
+        out: list[FileInfo] = []
+        try:
+            paginator = self._s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    out.append(FileInfo(obj["Key"], int(obj["Size"]), obj["LastModified"]))
+        except (ClientError, BotoCoreError) as exc:
+            raise LakehouseIOError(
+                "list failed", details={"prefix": prefix, "error": str(exc)}
+            ) from exc
+        return out
 
     def list_keys(self, prefix: str) -> list[str]:
         """All object keys under ``prefix`` (any extension)."""

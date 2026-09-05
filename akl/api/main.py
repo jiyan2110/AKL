@@ -21,7 +21,7 @@ from akl.api.deps import AppState, JobRegistry, get_state
 from akl.api.errors import install_error_handlers
 from akl.api.middleware.ratelimit import TokenBucketLimiter
 from akl.api.middleware.request_id import RequestContextMiddleware
-from akl.api.routers import chat, documents, health, search, sources
+from akl.api.routers import admin, chat, documents, health, search, sources
 from akl.config import Settings
 from akl.db.session import Database
 from akl.errors import AKLError
@@ -103,7 +103,14 @@ def create_app(
         )
     app.add_middleware(RequestContextMiddleware)
     install_error_handlers(app)
-    for router in (health.router, search.router, chat.router, documents.router, sources.router):
+    for router in (
+        health.router,
+        search.router,
+        chat.router,
+        documents.router,
+        sources.router,
+        admin.router,
+    ):
         app.include_router(router)
 
     @app.get("/metrics", include_in_schema=False)
