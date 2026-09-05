@@ -72,13 +72,24 @@ def ensure(config_file: ConfigOpt = None) -> None:
 @qdrant_app.command("sync")
 def sync(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Compute the diff only.")] = False,
+    bm25: Annotated[
+        bool, typer.Option("--bm25/--no-bm25", help="Rebuild the BM25 index afterwards (PRD §7.6).")
+    ] = True,
     config_file: ConfigOpt = None,
 ) -> None:
-    """Reconcile Qdrant with Gold (upsert missing/stale points, delete orphans, verify counts)."""
-    rec, _p, engine, db = _ctx(config_file)
+    """Reconcile Qdrant with Gold (upsert missing/stale points, delete orphans, verify counts), then rebuild BM25."""
+    rec, pipeline, engine, db = _ctx(config_file)
     run_id = new_run_id("cli")
     try:
         rep = rec.sync(run_id=run_id, dry_run=dry_run)
+        if bm25 and not dry_run:
+            from akl.embedding.bm25.builder import build_bm25
+
+            b = build_bm25(pipeline.settings, pipeline.io, pipeline.gold, version=run_id)
+            typer.secho(
+                f"[OK ] bm25    version={b.version} documents={b.documents} terms={b.terms}",
+                fg=typer.colors.GREEN,
+            )
         typer.secho(
             f"[OK ] qdrant  collection={rep.collection} gold={rep.gold_points} before={rep.qdrant_points_before} "
             f"to_upsert={rep.to_upsert} to_delete={rep.to_delete}"

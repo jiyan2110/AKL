@@ -21,6 +21,7 @@ from akl.cli.ingest import ingest_app
 from akl.cli.lakehouse import lakehouse_app
 from akl.cli.qdrant import qdrant_app
 from akl.cli.query import query_app
+from akl.cli.search import ask_command, bm25_app, search_command
 from akl.config import Settings
 from akl.errors import AKLError
 
@@ -36,6 +37,9 @@ app.add_typer(chunk_app, name="chunk")
 app.add_typer(embed_app, name="embed")
 app.add_typer(qdrant_app, name="qdrant")
 app.add_typer(query_app, name="query")
+app.add_typer(bm25_app, name="bm25")
+app.command("search")(search_command)
+app.command("ask")(ask_command)
 
 
 def _version_callback(value: bool) -> None:

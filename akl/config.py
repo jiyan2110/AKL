@@ -257,9 +257,20 @@ class RetrievalSettings(_SectionSettings):
     rag_top_k: int = Field(default=8, ge=1)
     rag_min_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
     rag_min_candidates: int = Field(default=2, ge=1)
+    rag_strong_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     qdrant_hnsw_ef: int = Field(default=128, ge=8)
     rerank_enabled: bool = True
     rerank_model_id: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rerank_provider: str = "onnx"  # onnx | lexical | none
+    rerank_top_n: int = Field(default=40, ge=1)
+    rerank_onnx_int8: bool = False
+    rag_context_tokens: int = Field(default=3000, ge=200)
+    rag_neighbor_expansion: int = Field(default=0, ge=0, le=2)
+    rag_dedupe_jaccard: float = Field(default=0.85, ge=0.0, le=1.0)
+    rag_soft_filter_penalty: float = Field(default=0.85, ge=0.0, le=1.0)
+    rag_marginal_penalty: float = Field(default=0.9, ge=0.0, le=1.0)
+    bm25_k1: float = Field(default=1.5, gt=0)
+    bm25_b: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 _SECTIONS: tuple[type[_SectionSettings], ...] = (

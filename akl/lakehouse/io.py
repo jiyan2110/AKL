@@ -229,6 +229,19 @@ class LakehouseIO:
             raise LakehouseIOError("delete failed", details={"error": str(exc)}) from exc
         return deleted
 
+    def list_keys(self, prefix: str) -> list[str]:
+        """All object keys under ``prefix`` (any extension)."""
+        out: list[str] = []
+        try:
+            paginator = self._s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+                out.extend(obj["Key"] for obj in page.get("Contents", []))
+        except (ClientError, BotoCoreError) as exc:
+            raise LakehouseIOError(
+                "list failed", details={"prefix": prefix, "error": str(exc)}
+            ) from exc
+        return out
+
     def object_exists(self, key: str) -> bool:
         try:
             self._s3.head_object(Bucket=self._bucket, Key=key)
