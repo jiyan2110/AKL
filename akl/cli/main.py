@@ -16,9 +16,11 @@ import typer
 from akl import __version__
 from akl.cli.api import api_app
 from akl.cli.auth import auth_app
+from akl.cli.bench import bench_app
 from akl.cli.chunk import chunk_app
 from akl.cli.db import db_app
 from akl.cli.embed import embed_app
+from akl.cli.eval import eval_app
 from akl.cli.ingest import ingest_app
 from akl.cli.lakehouse import lakehouse_app
 from akl.cli.pipeline import pipeline_app
@@ -38,6 +40,8 @@ app.add_typer(db_app, name="db")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(chunk_app, name="chunk")
 app.add_typer(embed_app, name="embed")
+app.add_typer(eval_app, name="eval")
+app.add_typer(bench_app, name="bench")
 app.add_typer(qdrant_app, name="qdrant")
 app.add_typer(query_app, name="query")
 app.add_typer(bm25_app, name="bm25")

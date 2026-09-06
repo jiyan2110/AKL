@@ -1,0 +1,118 @@
+# Release (PRD §11.9): on a v* tag, build+push multi-arch images to GHCR, attach an SBOM, sign
+# with cosign (keyless, via GitHub OIDC — no key material needed as a secret), and cut a
+# GitHub Release. Requires `packages: write` (granted below); no other secrets are needed for the
+# default GHCR path. If you also publish to Docker Hub, add DOCKERHUB_USERNAME/TOKEN and a
+# second login+push step — left out here to avoid depending on secrets that may not exist yet.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write  # required for cosign's keyless OIDC signing
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API: ${{ github.repository }}/api
+  IMAGE_AIRFLOW: ${{ github.repository }}/airflow
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: api
+            image: ${{ github.repository }}/api
+            dockerfile: docker/api/Dockerfile
+          - name: airflow
+            image: ${{ github.repository }}/airflow
+            dockerfile: docker/airflow/Dockerfile
+    outputs:
+      api_digest: ${{ steps.digest.outputs.api }}
+      airflow_digest: ${{ steps.digest.outputs.airflow }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push ${{ matrix.name }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=release-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.name }}
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ github.ref_name }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.name }}.spdx.json
+        continue-on-error: true  # never block a release on SBOM tooling flakiness
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless)
+        run: cosign sign --yes "${{ env.REGISTRY }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+
+      - id: digest
+        run: echo "${{ matrix.name }}=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.spdx.json
+          if-no-files-found: warn
+
+  github-release:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Extract this version's CHANGELOG section
+        run: |
+          awk -v ver="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" ver "\\]" {found=1; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' CHANGELOG.md > release-notes.md
+          [ -s release-notes.md ] || echo "See CHANGELOG.md for details." > release-notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          generate_release_notes: true
+          files: |
+            sbom-api/sbom-api.spdx.json
+            sbom-airflow/sbom-airflow.spdx.json

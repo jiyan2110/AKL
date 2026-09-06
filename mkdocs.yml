@@ -1,0 +1,41 @@
+site_name: AI Knowledge Lakehouse
+site_description: Multi-source RAG on a Bronze/Silver/Gold lakehouse — ingestion, retrieval, and a chat API.
+repo_url: https://github.com/your-org/ai-knowledge-lakehouse
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Architecture Decisions:
+      - ADR-013 Airflow isolation: adr/ADR-013-airflow-isolated-akl-venv.md
+      - ADR-014 Error semantics: adr/ADR-014-service-errors-vs-auth-errors.md
+  - Runbooks:
+      - Incident response: runbooks/incident-response.md
+      - Backup and restore: runbooks/backup-restore.md
+      - Rotating secrets: runbooks/rotating-secrets.md
+      - Alerting: runbooks/alerting.md
+  - Security: security/index.md
+  - Benchmarks: benchmarks/index.md
+  - Reference:
+      - Error codes: reference/errors.md
+      - Metrics: reference/metrics.md
+      - API (OpenAPI): reference/api.md
+  - Release checklist: release-checklist.md

@@ -24,7 +24,7 @@ PY            := $(UV) run python
 COMPOSE_BASE  := docker compose -f docker-compose.yml
 COMPOSE_DEV   := $(COMPOSE_BASE) -f docker-compose.dev.yml
 COMPOSE_PROD  := $(COMPOSE_BASE) -f docker-compose.prod.yml
-YAMLLINT_CFG  := {extends: default, rules: {line-length: {max: 140}, document-start: disable, truthy: disable}}
+YAMLLINT_CFG  := {extends: default, ignore: [.venv/, site/, node_modules/], rules: {line-length: {max: 140}, document-start: disable, truthy: disable}}
 
 # Milestone that implements a not-yet-available target (edited as we go).
 define not_yet
@@ -61,7 +61,7 @@ fmt: ## Auto-fix lint issues and format
 
 .PHONY: test
 test: ## Run unit tests with coverage (exit code 5 = no tests collected, allowed)
-	$(UV) run pytest -m "not component and not integration and not api and not eval and not slow" --cov --cov-report=term-missing || [ $$? -eq 5 ]
+	$(UV) run pytest -m "not component and not integration and not api and not eval and not slow and not chaos" --cov --cov-report=term-missing || [ $$? -eq 5 ]
 
 .PHONY: test-unit
 test-unit: ## Unit tests only
@@ -193,6 +193,26 @@ prod-down: ## Stop the production stack
 prod-logs: ## Tail the production API logs
 	$(COMPOSE_PROD) --env-file .env --env-file .env.prod logs -f --tail=200 akl-api
 
+.PHONY: eval-generate eval-run eval-calibrate
+eval-generate: ## Generate a synthetic QA set from the current Gold corpus
+	$(UV) run akl-cli eval generate-qa
+
+eval-run: ## Run the latest QA set through real hybrid retrieval and report metrics
+	$(UV) run akl-cli eval run --check-answers
+
+eval-calibrate: ## Sweep confidence thresholds and recommend AKL_RAG_MIN_CONFIDENCE
+	$(UV) run akl-cli eval calibrate
+
+.PHONY: load-test chaos
+load-test: ## Load-test a running API (default: http://localhost:8000, 20 users for 2 minutes)
+	AKL_LOAD_TARGET=$${AKL_LOAD_TARGET:-http://localhost:8000} \
+	$(UV) run --group load locust -f tests/load/locustfile.py --headless \
+		-H $${AKL_LOAD_TARGET:-http://localhost:8000} -u $${AKL_LOAD_USERS:-20} -r $${AKL_LOAD_SPAWN_RATE:-2} -t $${AKL_LOAD_DURATION:-2m}
+
+chaos: ## Chaos test: stop dependencies mid-request against the LIVE dev stack, confirm graceful degradation + recovery
+	@echo "This stops/restarts real containers (qdrant, postgres) in your dev stack. Ctrl+C now to abort."
+	AKL_ALLOW_CHAOS_TESTS=true $(UV) run pytest tests/chaos -m chaos -q -s
+
 .PHONY: token
 token: ## Mint a development JWT (needs AKL_JWT_SECRET)
 	$(UV) run akl-cli auth mint-token --user dev --groups eng --levels public,internal,restricted --roles admin
@@ -208,10 +228,20 @@ ask: ## Cited answer (extractive until the LLM lands): make ask Q="..."
 	$(UV) run akl-cli ask "$(Q)"
 
 .PHONY: bench
-bench: ## Run benchmark harness
-	$(call not_yet,bench,55)
+bench: ## Run the latency benchmark harness against the local stack
+	$(UV) run akl-cli bench run --include-answer
 
 .PHONY: clean
 clean: ## Remove caches and build artefacts
-	rm -rf .mypy_cache .ruff_cache .pytest_cache .hypothesis htmlcov coverage.xml dist build
+	rm -rf .mypy_cache .ruff_cache .pytest_cache .hypothesis htmlcov coverage.xml dist build site
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
+
+.PHONY: docs-reference docs-build docs-serve
+docs-reference: ## Regenerate docs/reference/{errors,metrics}.md from the codebase
+	$(UV) run python scripts/generate_docs_reference.py
+
+docs-build: docs-reference ## Build the static docs site into ./site (strict: fails on broken links/nav)
+	$(UV) run --group docs mkdocs build --strict
+
+docs-serve: docs-reference ## Serve the docs site locally with live reload (http://localhost:8001)
+	$(UV) run --group docs mkdocs serve -a localhost:8001

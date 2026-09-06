@@ -1,0 +1,58 @@
+# Deploy (PRD §11.10): manual, workflow_dispatch-only template for a single free-tier / low-cost VM
+# (Oracle Cloud Free Tier, a $5-6/mo VPS, etc.). This is intentionally a TEMPLATE: it needs
+# SSH_HOST, SSH_USER, and SSH_PRIVATE_KEY repository secrets before it can run, and assumes the VM
+# already has Docker + Docker Compose installed and this repo cloned at DEPLOY_PATH. It is not
+# wired to run automatically on release — trigger it by hand once the target is ready.
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (must have a matching GitHub Environment configured with the secrets below)"
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      ref:
+        description: "Git ref to deploy (branch, tag, or commit SHA)"
+        required: true
+        default: main
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            cd "${DEPLOY_PATH:-/opt/akl}"
+            git fetch --all --tags
+            git checkout "${{ inputs.ref }}"
+            git pull --ff-only || true
+            make prod-build
+            make prod-up
+            # Give the API a moment to become healthy before checking.
+            for i in $(seq 1 20); do
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+                --env-file .env --env-file .env.prod ps akl-api | grep -q healthy && break
+              sleep 5
+            done
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+              --env-file .env --env-file .env.prod ps
+
+      - name: Smoke-test the deployed API
+        run: |
+          curl -fsS "https://${{ vars.AKL_API_HOST }}/v1/health" || {
+            echo "Deployed API failed its health check"; exit 1;
+          }

@@ -1,0 +1,124 @@
+# CI (PRD §11.8): lint -> unit -> {component, dag-integrity, docker-build} on every push/PR.
+# All jobs reuse the exact Makefile targets a developer runs locally (`make lint`, `make test`,
+# `make up && make wait && make test-component`) so CI can never drift from local dev behaviour.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_SYSTEM_PYTHON: "0"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev --group docs
+      - run: make lint
+      - name: Build docs (strict)
+        run: make docs-build
+
+  unit:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: make test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  component:
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: Start data services
+        run: make up
+      - name: Wait for health
+        run: make wait
+      - name: Run component tests
+        run: make test-component
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs --tail=200
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v --remove-orphans
+
+  dag-integrity:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Airflow (constrained)
+        run: |
+          pip install "apache-airflow==2.10.5" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt"
+      - name: Validate all 5 DAGs
+        env:
+          AIRFLOW_HOME: /tmp/airflow-ci
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+          AKL_DAG_CONFIG_DIR: ${{ github.workspace }}/configs/dags
+          PYTHONPATH: ${{ github.workspace }}/airflow/plugins
+        run: pytest tests/airflow -q
+
+  docker-build:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [api, airflow]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image }} image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.image == 'api' && 'docker/api/Dockerfile' || 'docker/airflow/Dockerfile' }}
+          push: false
+          tags: akl-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  ci-summary:
+    needs: [component, dag-integrity, docker-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any required job failed
+        run: |
+          if [ "${{ needs.component.result }}" != "success" ] || \
+             [ "${{ needs.dag-integrity.result }}" != "success" ] || \
+             [ "${{ needs.docker-build.result }}" != "success" ]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi

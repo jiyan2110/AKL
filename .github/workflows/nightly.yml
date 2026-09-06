@@ -1,0 +1,85 @@
+# Nightly integration + eval (PRD §11.8): full stack, real seed corpus, retrieval-quality gate,
+# latency benchmark. Runs on a schedule (not on every PR — this is slower and uses more resources
+# than ci.yml) and is always available via workflow_dispatch for an on-demand run.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"  # 03:17 UTC daily; off-peak, offset from the hour to avoid GitHub's load spikes
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: Start full stack (data services + Airflow)
+        run: |
+          make up
+          make wait
+          make airflow-build
+          make airflow-up
+      - name: Wait for Airflow webserver
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/health && break
+            sleep 5
+          done
+      - name: Seed the example corpus end to end
+        run: make seed
+      - name: DAG smoke test
+        run: make dags-test
+      - name: Component tests (full suite)
+        run: make test-component
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs --tail=300
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v --remove-orphans
+
+  eval:
+    needs: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: Start stack and seed
+        run: |
+          make up
+          make wait
+          make seed
+      - name: Generate QA set
+        run: uv run akl-cli eval generate-qa --n 40
+      - name: Run eval with quality gate
+        run: |
+          uv run akl-cli eval run \
+            --min-recall 0.85 --min-mrr 0.70 --min-refusal-precision 0.80 \
+            --out eval-report.json
+      - name: Run latency benchmark
+        run: uv run akl-cli bench run --max-p95-ms 2000 --out-json bench-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-reports
+          path: |
+            eval-report.json
+            bench-report.json
+            docs/benchmarks/*.md
+          if-no-files-found: warn
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v --remove-orphans

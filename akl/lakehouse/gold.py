@@ -17,6 +17,7 @@ from akl.lakehouse.schemas.gold import (
     CHUNK_EMBEDDINGS,
     DEFAULT_EMBEDDING_DIM,
     DEFAULT_EMBEDDING_VERSION,
+    EVAL_QA_PAIRS,
     RETRIEVAL_UNITS,
     STATS,
 )
@@ -139,6 +140,28 @@ class GoldStore:
 
     def write_stats(self, rows: Sequence[Mapping[str, Any]], *, run_id: str) -> WriteResult:
         return self._write(pa.Table.from_pylist(list(rows), schema=STATS.schema), STATS, run_id)
+
+    def write_qa_pairs(self, rows: Sequence[Mapping[str, Any]], *, run_id: str) -> WriteResult:
+        return self._write(
+            pa.Table.from_pylist(list(rows), schema=EVAL_QA_PAIRS.schema), EVAL_QA_PAIRS, run_id
+        )
+
+    def read_qa_pairs(self, *, version: str | None = None) -> pa.Table:
+        self.ensure_views(refresh=False)
+        source = self.dataset_source("eval/qa_pairs", EVAL_QA_PAIRS)
+        where = f"WHERE version = '{version}'" if version else ""
+        return self._engine.execute(f"SELECT * FROM {source} {where} ORDER BY qa_id")  # noqa: S608 - version from settings/CLI
+
+    def latest_qa_version(self) -> str | None:
+        """Lexicographically greatest version string (run ids embed a timestamp, so this is
+        "most recent" in practice — the schema has no separate created_at column)."""
+        source = self.dataset_source("eval/qa_pairs", EVAL_QA_PAIRS)
+        table = self._engine.execute(
+            f"SELECT DISTINCT version FROM {source} ORDER BY version DESC LIMIT 1"  # noqa: S608 - internal column only
+        )
+        if table.num_rows == 0:
+            return None
+        return str(table.column("version")[0].as_py())
 
     def active_units(
         self, *, where: str | None = None, columns: Sequence[str] | None = None
