@@ -27,30 +27,47 @@ class ChunkRepository(Repository):
         return list(self.session.scalars(stmt))
 
     def upsert_current(self, rows: Sequence[dict[str, Any]]) -> int:
-        """Insert or re-activate chunks; returns the number of rows sent."""
+        """Insert or re-activate chunks in PostgreSQL-safe batches."""
         if not rows:
             return 0
-        stmt = pg_insert(Chunk).values(list(rows))
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[Chunk.chunk_id],
-            set_={
-                "lineage_id": stmt.excluded.lineage_id,
-                "document_version_id": stmt.excluded.document_version_id,
-                "chunk_index": stmt.excluded.chunk_index,
-                "embedded_text_sha256": stmt.excluded.embedded_text_sha256,
-                "token_count": stmt.excluded.token_count,
-                "quality_score": stmt.excluded.quality_score,
-                "security_level": stmt.excluded.security_level,
-                "allowed_groups": stmt.excluded.allowed_groups,
-                "chunker_version": stmt.excluded.chunker_version,
-                "chunk_config_hash": stmt.excluded.chunk_config_hash,
-                "is_current": True,
-                "is_deleted": False,
-                "updated_at": func.now(),
-            },
-        )
-        self.session.execute(stmt)
-        return len(rows)
+
+        # Deduplicate by chunk_id while preserving last occurrence.
+        unique_rows = {}
+        for row in rows:
+            unique_rows[row["chunk_id"]] = row
+
+        deduped_rows = list(unique_rows.values())
+
+        batch_size = 500
+        total = 0
+
+        for start in range(0, len(deduped_rows), batch_size):
+            batch = deduped_rows[start : start + batch_size]
+
+            stmt = pg_insert(Chunk).values(batch)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[Chunk.chunk_id],
+                set_={
+                    "lineage_id": stmt.excluded.lineage_id,
+                    "document_version_id": stmt.excluded.document_version_id,
+                    "chunk_index": stmt.excluded.chunk_index,
+                    "embedded_text_sha256": stmt.excluded.embedded_text_sha256,
+                    "token_count": stmt.excluded.token_count,
+                    "quality_score": stmt.excluded.quality_score,
+                    "security_level": stmt.excluded.security_level,
+                    "allowed_groups": stmt.excluded.allowed_groups,
+                    "chunker_version": stmt.excluded.chunker_version,
+                    "chunk_config_hash": stmt.excluded.chunk_config_hash,
+                    "is_current": True,
+                    "is_deleted": False,
+                    "updated_at": func.now(),
+                },
+            )
+
+            self.session.execute(stmt)
+            total += len(batch)
+
+        return total
 
     def retire(self, chunk_ids: Sequence[uuid.UUID], *, deleted: bool) -> int:
         if not chunk_ids:
