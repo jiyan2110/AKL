@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 import time
 import uuid
@@ -13,8 +12,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from akl.api import metrics
+from akl.observability.logging import bind_context, get_logger
+from akl.observability.tracing import traced
 
-log = logging.getLogger("akl.api.access")
+log = get_logger("akl.api.access")
 _UUID4 = re.compile(r"^[0-9a-fA-F-]{32,36}$")
 
 
@@ -36,8 +37,12 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         metrics.HTTP_INFLIGHT.labels(route=route).inc()
         status = 500
         try:
-            response = await call_next(request)
-            status = response.status_code
+            with (
+                bind_context(request_id=request_id),
+                traced("http.request", method=request.method, route=route),
+            ):
+                response = await call_next(request)
+                status = response.status_code
         finally:
             elapsed = time.perf_counter() - start
             route = route_template(request)

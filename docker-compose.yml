@@ -51,8 +51,6 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: akl-postgres
-    ports:
-      - "55432:5432"
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
@@ -82,9 +80,6 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: akl-minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -120,9 +115,6 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.12.4
     container_name: akl-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
     restart: unless-stopped
     environment:
       QDRANT__SERVICE__HTTP_PORT: "6333"
@@ -178,8 +170,6 @@ services:
   airflow-webserver:
     image: akl-airflow:local
     container_name: akl-airflow-webserver
-    ports:
-      - "8080:8080"
     command: webserver
     environment: *airflow_env
     volumes: *airflow_volumes
@@ -204,6 +194,103 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # --------------------------------------------------------------------------- Observability (PRD Ch.8)
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: akl-pushgateway
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+    networks: [akl-data]
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9091/-/healthy || exit 1"]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: akl-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # no-op on Docker Desktop; needed on native Linux
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - akl_prometheus_data:/prometheus
+    networks: [akl-data]
+    depends_on: [pushgateway]
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: akl-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./docker/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - akl_alertmanager_data:/alertmanager
+    networks: [akl-data]
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
+
+  grafana:
+    image: grafana/grafana-oss:11.3.1
+    container_name: akl-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - akl_grafana_data:/var/lib/grafana
+    networks: [akl-data, akl-edge]
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.113.0
+    container_name: akl-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./docker/otel/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    networks: [akl-data]
+    profiles: ["tracing"]  # `docker compose --profile tracing up`; off by default (AKL_OTEL_ENABLED=false too)
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.2
+    container_name: akl-mlflow
+    restart: unless-stopped
+    entrypoint: ["bash", "-c"]
+    command: >-
+      pip install psycopg2-binary boto3 >/dev/null 2>&1;
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - akl_mlflow_data:/mlflow
+    networks: [akl-data, akl-edge]
+    profiles: ["mlflow"]  # `docker compose --profile mlflow up`; off by default (AKL_MLFLOW_ENABLED=false too)
+    healthcheck:
+      <<: *hc_defaults
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/5000' || exit 1"]
+
 networks:
   akl-edge:
     name: akl-edge
@@ -225,3 +312,11 @@ volumes:
     name: akl_airflow_logs
   akl_models:
     name: akl_models
+  akl_prometheus_data:
+    name: akl_prometheus_data
+  akl_alertmanager_data:
+    name: akl_alertmanager_data
+  akl_grafana_data:
+    name: akl_grafana_data
+  akl_mlflow_data:
+    name: akl_mlflow_data

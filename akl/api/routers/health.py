@@ -96,6 +96,19 @@ def check_dependencies(state: AppState) -> list[DependencyStatus]:
         deps.append(
             DependencyStatus(name="startup", ok=False, latency_ms=0.0, detail=state.ready_error)
         )
+    if state.db is not None:
+        from akl.observability.freshness import refresh_freshness_gauges
+
+        for f in refresh_freshness_gauges(state.db, state.settings.observability):
+            age = f"{f.age_minutes:.1f}m ago" if f.age_minutes is not None else "never succeeded"
+            deps.append(
+                DependencyStatus(
+                    name=f"freshness:{f.dag_id}",
+                    ok=not f.stale,
+                    latency_ms=0.0,
+                    detail=f"{age} (stale_after={f.stale_after_minutes}m)",
+                )
+            )
     return deps
 
 

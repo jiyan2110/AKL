@@ -331,6 +331,31 @@ class LLMSettings(_SectionSettings):
     prompt_version: str = "answer_v1"
 
 
+class ObservabilitySettings(_SectionSettings):
+    """Logging, tracing, metrics push, lineage and MLflow (PRD Chapter 8)."""
+
+    yaml_section: ClassVar[str] = "observability"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    pushgateway_url: str = ""  # "" disables metrics push (API /metrics scrape is always on)
+    pushgateway_job: str = "akl_pipelines"
+    otel_enabled: bool = False
+    otel_exporter_endpoint: str = "http://otel-collector:4318/v1/traces"
+    otel_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    lineage_enabled: bool = True
+    mlflow_enabled: bool = False
+    mlflow_tracking_uri: str = "http://mlflow:5000"
+    mlflow_experiment: str = "akl-embedding"
+    freshness_stale_after_minutes: dict[str, int] = Field(
+        default_factory=lambda: {
+            "akl_ingestion": 60,
+            "akl_chunking": 90,
+            "akl_embedding": 120,
+            "akl_qdrant_sync": 120,
+        }
+    )
+
+
 _SECTIONS: tuple[type[_SectionSettings], ...] = (
     CoreSettings,
     DatabaseSettings,
@@ -342,6 +367,7 @@ _SECTIONS: tuple[type[_SectionSettings], ...] = (
     RetrievalSettings,
     ApiSettings,
     LLMSettings,
+    ObservabilitySettings,
 )
 
 
@@ -358,6 +384,7 @@ class Settings(BaseModel):
     retrieval: RetrievalSettings
     api: ApiSettings
     llm: LLMSettings
+    observability: ObservabilitySettings
     config_file: Path | None = None
 
     @model_validator(mode="after")
@@ -424,6 +451,7 @@ class Settings(BaseModel):
                 retrieval=sections["retrieval"],
                 api=sections["api"],
                 llm=sections["llm"],
+                observability=sections["observability"],
                 config_file=resolved_file if resolved_file.exists() else None,
             )
         except ValidationError as exc:

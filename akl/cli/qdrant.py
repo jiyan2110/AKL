@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from akl.config import Settings
+from akl.db.repositories.runs import RunRepository
 from akl.db.session import Database
 from akl.embedding.pipeline import EmbeddingPipeline
 from akl.embedding.qdrant.reconciler import QdrantReconciler
@@ -79,9 +80,17 @@ def sync(
 ) -> None:
     """Reconcile Qdrant with Gold (upsert missing/stale points, delete orphans, verify counts), then rebuild BM25."""
     rec, pipeline, engine, db = _ctx(config_file)
+
     run_id = new_run_id("cli")
+
+    with db.session() as s:
+        RunRepository(s).start_run(run_id, "akl_qdrant_sync")
+
+    state = "failed"
+
     try:
         rep = rec.sync(run_id=run_id, dry_run=dry_run)
+
         if bm25 and not dry_run:
             from akl.embedding.bm25.builder import build_bm25
 
@@ -90,19 +99,29 @@ def sync(
                 f"[OK ] bm25    version={b.version} documents={b.documents} terms={b.terms}",
                 fg=typer.colors.GREEN,
             )
+
+        state = "success"
+
         typer.secho(
-            f"[OK ] qdrant  collection={rep.collection} gold={rep.gold_points} before={rep.qdrant_points_before} "
-            f"to_upsert={rep.to_upsert} to_delete={rep.to_delete}"
+            f"[OK ] qdrant  collection={rep.collection} gold={rep.gold_points} "
+            f"before={rep.qdrant_points_before} to_upsert={rep.to_upsert} "
+            f"to_delete={rep.to_delete}"
             + (
                 ""
                 if dry_run
-                else f" upserted={rep.upserted} deleted={rep.deleted} after={rep.qdrant_points_after} drift={rep.drift}"
+                else f" upserted={rep.upserted} deleted={rep.deleted} "
+                f"after={rep.qdrant_points_after} drift={rep.drift}"
             ),
             fg=typer.colors.GREEN if rep.drift == 0 else typer.colors.RED,
         )
+
     except AKLError as exc:
         _fail(exc)
+
     finally:
+        with db.session() as s:
+            RunRepository(s).finish_run(run_id, state=state)
+
         engine.close()
         db.dispose()
 

@@ -1,0 +1,10 @@
+# Dev default: log-only receiver (visible via `docker compose logs alertmanager`).
+# Production: replace `receivers` with Slack/PagerDuty/email (see docs/runbooks/alerting.md).
+route:
+  receiver: default
+  group_by: ["alertname", "dag_id"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+receivers:
+  - name: default

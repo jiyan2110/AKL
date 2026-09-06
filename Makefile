@@ -162,6 +162,23 @@ dags-test: ## Import all DAGs inside the scheduler container, then run akl_inges
 dags-unpause: ## Unpause all AKL DAGs
 	$(COMPOSE_DEV) exec airflow-scheduler bash -c 'for d in akl_ingestion akl_chunking akl_embedding akl_qdrant_sync akl_maintenance; do airflow dags unpause $$d; done'
 
+.PHONY: observability-up observability-down grafana-up tracing-up mlflow-up
+observability-up: ## Start Prometheus, Pushgateway, Alertmanager, Grafana (dashboards at http://localhost:3000, admin/admin)
+	$(COMPOSE_DEV) up -d pushgateway prometheus alertmanager grafana
+
+observability-down: ## Stop the observability services
+	$(COMPOSE_DEV) stop pushgateway prometheus alertmanager grafana
+
+grafana-up: observability-up ## Alias: start the observability stack and open Grafana
+	@echo "Grafana: http://localhost:$${AKL_DEV_GRAFANA_PORT:-3000} (admin/admin unless overridden in .env)"
+
+tracing-up: ## Start the OpenTelemetry collector (needs AKL_OTEL_ENABLED=true in .env to actually receive spans)
+	$(COMPOSE_DEV) --profile tracing up -d otel-collector
+
+mlflow-up: ## Start the MLflow tracking server (needs AKL_MLFLOW_ENABLED=true in .env to actually log runs)
+	$(COMPOSE_DEV) --profile mlflow up -d mlflow
+	@echo "MLflow: http://localhost:$${AKL_DEV_MLFLOW_PORT:-5000}"
+
 .PHONY: token
 token: ## Mint a development JWT (needs AKL_JWT_SECRET)
 	$(UV) run akl-cli auth mint-token --user dev --groups eng --levels public,internal,restricted --roles admin

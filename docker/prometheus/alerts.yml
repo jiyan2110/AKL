@@ -1,0 +1,57 @@
+# Alert rules (PRD §8.7). Kept deliberately small and high-signal; extend per environment.
+groups:
+  - name: akl-api
+    rules:
+      - alert: AKLHighErrorRate
+        expr: |
+          sum(rate(akl_http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(akl_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "AKL API 5xx rate above 5% for 5m"
+          description: "{{ $value | humanizePercentage }} of requests are failing with 5xx."
+
+      - alert: AKLSearchLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(akl_search_latency_seconds_bucket{stage="total"}[5m])) by (le)) > 2
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "p95 search latency above 2s"
+
+      - alert: AKLInsufficientEvidenceSpike
+        expr: sum(rate(akl_insufficient_evidence_total[15m])) > 0.5
+        for: 15m
+        labels: {severity: warn}
+        annotations:
+          summary: "Refusal rate is unusually high — check retrieval health / corpus coverage"
+
+  - name: akl-pipelines
+    rules:
+      - alert: AKLDagStale
+        expr: akl_dag_stale == 1
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "{{ $labels.dag_id }} has not succeeded within its freshness threshold"
+
+      - alert: AKLQdrantDrift
+        expr: akl_qdrant_drift != 0
+        for: 0m
+        labels: {severity: page}
+        annotations:
+          summary: "Qdrant point count drifted from Gold after sync (drift={{ $value }})"
+
+      - alert: AKLEmbeddingCoverageLow
+        expr: akl_embedding_coverage < 0.99
+        for: 30m
+        labels: {severity: warn}
+        annotations:
+          summary: "Embedding coverage below 99% for 30m"
+
+      - alert: AKLGateFailures
+        expr: increase(akl_gate_failures_total[1h]) > 0
+        for: 0m
+        labels: {severity: page}
+        annotations:
+          summary: "Quality gate {{ $labels.gate }} failed in {{ $labels.dag_id }}"

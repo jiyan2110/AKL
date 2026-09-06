@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from akl.config import Settings
 from akl.db.models import QuarantineItem
+from akl.db.repositories.runs import RunRepository
 from akl.db.session import Database
 from akl.errors import AKLError
 from akl.ingestion.service import IngestionService
@@ -74,25 +75,41 @@ def run(
     """Discover + fetch to Bronze (recording documents), then parse to Silver."""
     service, engine, db = _service(config_file)
     run_id = new_run_id("cli")
+    with db.session() as session:
+        RunRepository(session).start_run(run_id, "akl_ingestion")
+    state = "failed"
+
     try:
         ids = [connector] if connector else [c.id for c in service.connector_configs()]
+
         for cid in ids:
             report = service.run_connector(cid, run_id=run_id)
+
             typer.secho(
                 f"[OK ] fetch   {cid}: discovered={report.discovered} fetched={report.fetched} dedup={report.deduplicated} "
                 f"failed={report.failed} deletions={len(report.deletions)} manifest_rows={report.manifest_rows} ({report.duration_s:.1f}s)",
                 fg=typer.colors.GREEN if report.failed == 0 else typer.colors.YELLOW,
             )
+
             for f in report.failures:
                 typer.secho(f"       {f['code']} {f['uri']}: {f['error']}", fg=typer.colors.RED)
+
         if parse:
             _parse(service, run_id)
+
+        state = "success"
+
     except (AKLError, KeyError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
+
     finally:
+        with db.session() as session:
+            RunRepository(session).finish_run(run_id, state=state)
+
         engine.close()
         db.dispose()
+
     typer.echo(json.dumps({"run_id": run_id}))
 
 

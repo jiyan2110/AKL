@@ -12,6 +12,7 @@ import typer
 from akl.chunking.incremental import ChunkingService
 from akl.config import Settings
 from akl.db.repositories.chunks import ChunkRepository
+from akl.db.repositories.runs import RunRepository
 from akl.db.session import Database
 from akl.errors import AKLError
 from akl.lakehouse.bronze import new_run_id
@@ -48,15 +49,33 @@ def run(
     """Chunk documents lacking chunks for the active chunker version/config (incremental)."""
     service, engine, db = _service(config_file)
     run_id = new_run_id("cli")
+
+    with db.session() as s:
+        RunRepository(s).start_run(run_id, "akl_chunking")
+
+    state = "failed"
+    rep = None
+
     try:
         ids = [uuid.UUID(d) for d in document_id] if document_id else None
         rep = service.run(run_id=run_id, document_ids=ids, limit=limit, refresh_gold=gold)
+        state = "success"
+
     except AKLError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
+
     finally:
+        with db.session() as s:
+            RunRepository(s).finish_run(
+                run_id,
+                state=state,
+                gold_snapshot_id=getattr(rep, "gold_snapshot_id", None) if rep else None,
+            )
+
         engine.close()
         db.dispose()
+
     colour = typer.colors.GREEN if rep.documents_failed == 0 else typer.colors.YELLOW
     typer.secho(
         f"[OK ] chunk   documents considered={rep.documents_considered} chunked={rep.documents_chunked} "
@@ -65,13 +84,16 @@ def run(
         f"added={rep.added} removed={rep.removed} reparented={rep.reparented})",
         fg=colour,
     )
+
     for f in rep.failures:
         typer.secho(f"       {f['code']} {f['document_id']}: {f['error']}", fg=typer.colors.RED)
+
     if gold:
         typer.secho(
             f"[OK ] gold    retrieval_units +{rep.gold_rows_promoted} rows; gold_snapshot_id={rep.gold_snapshot_id}",
             fg=typer.colors.GREEN,
         )
+
     typer.echo(
         json.dumps(
             {

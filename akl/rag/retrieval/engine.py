@@ -10,6 +10,7 @@ from typing import Any
 from akl.config import RetrievalSettings
 from akl.embedding.provider import EmbeddingModelError
 from akl.errors import AKLError
+from akl.observability.tracing import traced
 from akl.rag.query.filters import allowed_by_filters, to_qdrant_filter
 from akl.rag.query.processor import ProcessedQuery
 from akl.rag.retrieval.dense import DenseRetriever
@@ -79,6 +80,12 @@ class HybridRetriever:
     ) -> RetrievalResult:
         if self.dense is None and self.sparse is None:
             raise RetrievalUnavailableError("no retrieval backend available")
+        with traced("retrieval.retrieve", mode=mode, intent=query.intent.value):
+            return self._retrieve(query, mode=mode, rerank=rerank)
+
+    def _retrieve(
+        self, query: ProcessedQuery, *, mode: str, rerank: bool | None
+    ) -> RetrievalResult:
         timings: dict[str, float] = {}
         flags: list[str] = []
         s = self.settings
@@ -141,7 +148,8 @@ class HybridRetriever:
             t0 = time.perf_counter()
             reranker = self.reranker or self._fallback
             try:
-                fused = reranker.rerank(query.dense_text, fused, top_n=s.rerank_top_n)
+                with traced("retrieval.rerank", reranker=reranker.name):
+                    fused = reranker.rerank(query.dense_text, fused, top_n=s.rerank_top_n)
                 reranker_name = reranker.name
             except (EmbeddingModelError, AKLError, RuntimeError, OSError) as exc:
                 flags.append("reranker_fallback")
@@ -194,30 +202,32 @@ class HybridRetriever:
 
         def run_dense() -> list[Candidate]:
             assert self.dense is not None
-            t0 = time.perf_counter()
-            vectors = self.dense.embed(query.dense_variants)
-            timings["embed_query"] = round((time.perf_counter() - t0) * 1000, 1)
-            t1 = time.perf_counter()
-            res = self.dense.search(
-                vectors,
-                k=s.retrieval_dense_k,
-                query_filter=to_qdrant_filter(query.principal, query.hard_filters, soft),
-                hnsw_ef=s.qdrant_hnsw_ef,
-            )
-            timings["dense"] = round((time.perf_counter() - t1) * 1000, 1)
-            return res
+            with traced("retrieval.dense"):
+                t0 = time.perf_counter()
+                vectors = self.dense.embed(query.dense_variants)
+                timings["embed_query"] = round((time.perf_counter() - t0) * 1000, 1)
+                t1 = time.perf_counter()
+                res = self.dense.search(
+                    vectors,
+                    k=s.retrieval_dense_k,
+                    query_filter=to_qdrant_filter(query.principal, query.hard_filters, soft),
+                    hnsw_ef=s.qdrant_hnsw_ef,
+                )
+                timings["dense"] = round((time.perf_counter() - t1) * 1000, 1)
+                return res
 
         def run_sparse() -> list[Candidate]:
             assert self.sparse is not None
-            t0 = time.perf_counter()
-            res = self.sparse.search(
-                query.sparse_text,
-                k=s.retrieval_sparse_k,
-                allowed=allowed,
-                exact_terms=query.exact_terms,
-            )
-            timings["sparse"] = round((time.perf_counter() - t0) * 1000, 1)
-            return res
+            with traced("retrieval.sparse"):
+                t0 = time.perf_counter()
+                res = self.sparse.search(
+                    query.sparse_text,
+                    k=s.retrieval_sparse_k,
+                    allowed=allowed,
+                    exact_terms=query.exact_terms,
+                )
+                timings["sparse"] = round((time.perf_counter() - t0) * 1000, 1)
+                return res
 
         dense_res: list[Candidate] = []
         sparse_res: list[Candidate] = []

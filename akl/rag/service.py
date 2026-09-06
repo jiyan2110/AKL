@@ -27,6 +27,7 @@ from akl.errors import AKLError
 from akl.lakehouse.engine import DuckDBEngine
 from akl.lakehouse.gold import GoldStore
 from akl.lakehouse.io import LakehouseIO
+from akl.observability.tracing import traced
 from akl.rag.citations import CitedAnswer, attach_citations, extractive_answer
 from akl.rag.context_builder import BuiltContext, ContextBuilder
 from akl.rag.llm.provider import LLMProvider, LLMUnavailableError, build_llm
@@ -441,20 +442,21 @@ class RAGService:
             full_text = ""
             first_token: float | None = None
             try:
-                for delta in self.llm.stream(
-                    prompt.messages,
-                    max_tokens=self.settings.llm.llm_max_output_tokens,
-                    temperature=self.settings.llm.llm_temperature,
-                ):
-                    if first_token is None:
-                        first_token = round((time.perf_counter() - t_l) * 1000, 1)
-                    buffer += delta
-                    full_text += delta
-                    emit, buffer = _split_safe(buffer)
-                    if emit:
-                        yield {"event": "token", "text": emit}
-                if buffer:
-                    yield {"event": "token", "text": buffer}
+                with traced("llm.generate", model=self.llm.model):
+                    for delta in self.llm.stream(
+                        prompt.messages,
+                        max_tokens=self.settings.llm.llm_max_output_tokens,
+                        temperature=self.settings.llm.llm_temperature,
+                    ):
+                        if first_token is None:
+                            first_token = round((time.perf_counter() - t_l) * 1000, 1)
+                        buffer += delta
+                        full_text += delta
+                        emit, buffer = _split_safe(buffer)
+                        if emit:
+                            yield {"event": "token", "text": emit}
+                    if buffer:
+                        yield {"event": "token", "text": buffer}
             except LLMUnavailableError as exc:
                 flags.append("llm_unavailable")
                 self.flags.append(f"llm_unavailable:{exc.message}")

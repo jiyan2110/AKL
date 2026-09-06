@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -149,3 +150,30 @@ def run_all(api_url: Annotated[str | None, typer.Option()] = None) -> None:
     chunking()
     embedding()
     qdrant_sync(api_url=api_url)
+
+
+@pipeline_app.command("freshness")
+def freshness(
+    config_file: Annotated[Path | None, typer.Option("--config-file", "-c")] = None,
+) -> None:
+    """Show how long since each DAG last succeeded, per configs/settings.yaml thresholds."""
+    from akl.config import Settings
+    from akl.db.session import Database
+    from akl.observability.freshness import check_freshness
+
+    try:
+        settings = Settings.load(config_file=config_file)
+    except AKLError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+    db = Database(settings)
+    try:
+        for f in check_freshness(db, settings.observability):
+            age = f"{f.age_minutes:.1f}m ago" if f.age_minutes is not None else "never"
+            colour = typer.colors.RED if f.stale else typer.colors.GREEN
+            typer.secho(
+                f"{f.dag_id:<18} last_success={age:<14} stale_after={f.stale_after_minutes}m  {'STALE' if f.stale else 'ok'}",
+                fg=colour,
+            )
+    finally:
+        db.dispose()

@@ -16,3 +16,12 @@ services:
   airflow-webserver:
     ports:
       - "${AKL_DEV_AIRFLOW_PORT:-8080}:8080"
+  grafana:
+    ports:
+      - "${AKL_DEV_GRAFANA_PORT:-3000}:3000"
+  prometheus:
+    ports:
+      - "${AKL_DEV_PROMETHEUS_PORT:-9090}:9090"
+  mlflow:
+    ports:
+      - "${AKL_DEV_MLFLOW_PORT:-5000}:5000"

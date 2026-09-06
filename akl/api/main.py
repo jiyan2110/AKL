@@ -33,8 +33,12 @@ log = logging.getLogger("akl.api")
 
 def build_state(settings: Settings, *, warm: bool = True) -> AppState:
     """Construct the production AppState; failures are captured in ``ready_error`` (readiness → 503)."""
+    from akl.observability.logging import configure_logging
+    from akl.observability.tracing import configure_tracing
     from akl.rag.service import RAGService
 
+    configure_logging(settings)
+    configure_tracing(settings)
     limiter = TokenBucketLimiter(
         {"search": settings.api.rate_limit_rpm, "chat": settings.api.rate_limit_chat_rpm},
         default_rpm=settings.api.rate_limit_rpm,

@@ -18,10 +18,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from akl.config import Settings
+from akl.db.repositories.lineage import LineageRepository
 from akl.db.repositories.runs import RunRepository
 from akl.db.session import Database
 from akl.errors import AKLError
 from akl.lakehouse.engine import DuckDBEngine
+from akl.observability.logging import bind_context, get_logger
+from akl.observability.metrics import PipelineMetrics, apply_task_metrics
+
+log = get_logger("akl.pipelines")
 
 
 class GateFailed(AKLError):  # noqa: N818 - matches PRD error naming (AKL-E7001 quality gate)
@@ -37,6 +42,7 @@ class TaskContext:
     run_id: str
     dag_id: str
     task_id: str
+    lineage: dict[str, Any] | None = None
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -63,28 +69,57 @@ def task_scope(
     start = time.perf_counter()
     engine = DuckDBEngine(settings)
     ctx = TaskContext(settings, engine, db, run_id, dag_id, task_id)
+    pm = PipelineMetrics()
     state = "success"
     metrics: dict[str, Any] = {}
-    try:
-        yield ctx
-        metrics = getattr(ctx, "metrics", {}) or {}
-    except Exception as exc:
-        state = "failed"
-        metrics = {"error": f"{type(exc).__name__}: {exc}"[:500]}
-        raise
-    finally:
-        engine.close()
+    with bind_context(
+        run_id=run_id,
+        dag_id=dag_id,
+        task_id=task_id,
+        map_index=map_index if map_index != -1 else None,
+    ):
+        gate_failed = False
         try:
-            with db.session() as s:
-                RunRepository(s).finish_task(
-                    task_pk,
-                    state=state,
-                    rows_in=_int_or_none(metrics.get("rows_in")),
-                    rows_out=_int_or_none(metrics.get("rows_out")),
-                    metrics={**metrics, "duration_s": round(time.perf_counter() - start, 2)},
-                )
+            log.info("task_started")
+            yield ctx
+            metrics = getattr(ctx, "metrics", {}) or {}
+        except GateFailed as exc:
+            state, gate_failed = "failed", True
+            metrics = {"error": f"{type(exc).__name__}: {exc}"[:500]}
+            log.error("task_failed", error=metrics["error"], gate=True)
+            raise
+        except Exception as exc:
+            state = "failed"
+            metrics = {"error": f"{type(exc).__name__}: {exc}"[:500]}
+            log.error("task_failed", error=metrics["error"], exc_info=True)
+            raise
         finally:
-            db.dispose()
+            engine.close()
+            duration_s = round(time.perf_counter() - start, 2)
+            apply_task_metrics(pm, dag_id=dag_id, task_id=task_id, out=metrics)
+            pm.task_duration.labels(dag_id=dag_id, task_id=task_id, state=state).observe(duration_s)
+            if gate_failed:
+                pm.gate_failures.labels(dag_id=dag_id, gate=task_id).inc()
+            try:
+                with db.session() as s:
+                    RunRepository(s).finish_task(
+                        task_pk,
+                        state=state,
+                        rows_in=_int_or_none(metrics.get("rows_in")),
+                        rows_out=_int_or_none(metrics.get("rows_out")),
+                        metrics={**metrics, "duration_s": duration_s},
+                    )
+                    if ctx.lineage and settings.observability.lineage_enabled:
+                        LineageRepository(s).record(run_id=run_id, task_id=task_id, **ctx.lineage)
+            finally:
+                db.dispose()
+            pm.push(
+                settings.observability.pushgateway_url,
+                job=settings.observability.pushgateway_job,
+                dag_id=dag_id,
+                task_id=task_id,
+            )
+            log.info("task_finished", state=state, duration_s=duration_s)
 
 
 def finish_run(
@@ -98,11 +133,29 @@ def finish_run(
             RunRepository(s).finish_run(run_id, state=state, gold_snapshot_id=gold_snapshot_id)
     finally:
         db.dispose()
+    with bind_context(run_id=run_id, dag_id=dag_id):
+        log.info("run_finished", state=state, gold_snapshot_id=gold_snapshot_id)
     return {"run_id": run_id, "state": state}
 
 
 def _record(ctx: TaskContext, **metrics: Any) -> None:
     ctx.metrics = metrics  # type: ignore[attr-defined]
+
+
+def _lineage(
+    ctx: TaskContext,
+    *,
+    output_dataset: str,
+    rows_out: int,
+    input_dataset: str | None = None,
+    rows_in: int | None = None,
+) -> None:
+    ctx.lineage = {
+        "output_dataset": output_dataset,
+        "rows_out": rows_out,
+        "input_dataset": input_dataset,
+        "rows_in": rows_in,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +197,13 @@ def fetch_connector(run_id: str, connector_id: str, *, map_index: int = -1) -> d
             rows_out=rep.fetched,
             **{k: v for k, v in out.items() if k not in ("failures", "connector_id")},
         )
+        _lineage(
+            ctx,
+            output_dataset="bronze/manifest",
+            rows_out=rep.manifest_rows,
+            input_dataset=f"connector/{connector_id}",
+            rows_in=rep.discovered,
+        )
         return out
 
 
@@ -170,6 +230,13 @@ def parse_backlog(
             rows_in=rep.considered,
             rows_out=rep.parsed,
             **{k: v for k, v in out.items() if k != "failures"},
+        )
+        _lineage(
+            ctx,
+            output_dataset="silver/documents",
+            rows_out=rep.parsed,
+            input_dataset="bronze/manifest",
+            rows_in=rep.considered,
         )
         return out
 
@@ -244,6 +311,13 @@ def chunk_run(
             rows_out=rep.chunks_written,
             **{k: v for k, v in out.items() if k not in ("failures",)},
         )
+        _lineage(
+            ctx,
+            output_dataset="silver/chunks",
+            rows_out=rep.chunks_written,
+            input_dataset="silver/documents",
+            rows_in=rep.documents_considered,
+        )
         return out
 
 
@@ -308,6 +382,13 @@ def embed_run(run_id: str, *, limit: int | None = None) -> dict[str, Any]:
             rows_in=rep.backlog,
             rows_out=rep.written,
             **{k: v for k, v in out.items() if k not in ("failures", "job_id")},
+        )
+        _lineage(
+            ctx,
+            output_dataset="gold/chunk_embeddings",
+            rows_out=rep.written,
+            input_dataset="silver/chunks",
+            rows_in=rep.backlog,
         )
         return out
 
@@ -389,6 +470,12 @@ def bm25_build(run_id: str) -> dict[str, Any]:
             "prefix": rep.prefix,
         }
         _record(ctx, rows_out=rep.documents, terms=rep.terms)
+        _lineage(
+            ctx,
+            output_dataset="gold/indexes/bm25",
+            rows_out=rep.documents,
+            input_dataset="gold/retrieval_units",
+        )
         return out
 
 

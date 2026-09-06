@@ -1,0 +1,18 @@
+# Minimal OTLP collector: receives traces from the API and RAG service, logs them (dev).
+# Point exporters.otlp at Tempo/Jaeger in production; the API only needs AKL_OTEL_ENABLED=true.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  batch: {}
+exporters:
+  debug:
+    verbosity: basic
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

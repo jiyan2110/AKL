@@ -10,6 +10,7 @@ import typer
 
 from akl.config import Settings
 from akl.db.repositories.embedding_cache import EmbeddingCacheRepository
+from akl.db.repositories.runs import RunRepository
 from akl.db.session import Database
 from akl.embedding.pipeline import EmbeddingPipeline
 from akl.errors import AKLError
@@ -44,15 +45,29 @@ def run(
     """Embed every active Gold unit lacking a vector for the configured embedding version."""
     pipeline, engine, db = _pipeline(config_file)
     run_id = new_run_id("cli")
+
+    with db.session() as s:
+        RunRepository(s).start_run(run_id, "akl_embedding")
+
+    state = "failed"
+    rep = None
+
     try:
         rep = pipeline.run(run_id=run_id, limit=limit, batch_size=batch_size)
+        state = "success"
+
     except AKLError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         typer.echo(json.dumps(exc.details, indent=2, default=str), err=True)
         raise typer.Exit(code=1) from exc
+
     finally:
+        with db.session() as s:
+            RunRepository(s).finish_run(run_id, state=state)
+
         engine.close()
         db.dispose()
+
     colour = typer.colors.GREEN if rep.failed == 0 else typer.colors.YELLOW
     typer.secho(
         f"[OK ] embed   version={rep.embedding_version} backlog={rep.backlog} cache_hits={rep.cache_hits} "
@@ -60,8 +75,10 @@ def run(
         f"({rep.duration_s:.1f}s, {rep.throughput_cps} chunks/s)",
         fg=colour,
     )
+
     for f in rep.failures:
         typer.secho(f"       batch {f['batch']}: {f['error']}", fg=typer.colors.RED)
+
     typer.echo(json.dumps({"run_id": run_id, "job_id": str(rep.job_id)}))
 
 

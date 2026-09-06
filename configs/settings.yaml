@@ -103,3 +103,19 @@ llm:
   rag_strict: false
   conversation_ttl_days: 30
   prompt_version: answer_v1
+
+observability:
+  pushgateway_url: ""              # set to http://pushgateway:9091 to enable pipeline metrics push
+  pushgateway_job: akl_pipelines
+  otel_enabled: false
+  otel_exporter_endpoint: http://otel-collector:4318/v1/traces
+  otel_sample_ratio: 1.0
+  lineage_enabled: true
+  mlflow_enabled: false
+  mlflow_tracking_uri: http://mlflow:5000
+  mlflow_experiment: akl-embedding
+  freshness_stale_after_minutes:
+    akl_ingestion: 60
+    akl_chunking: 90
+    akl_embedding: 120
+    akl_qdrant_sync: 120

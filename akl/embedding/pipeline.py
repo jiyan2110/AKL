@@ -19,6 +19,7 @@ from akl.embedding.provider import EmbeddingProvider, build_provider
 from akl.lakehouse.engine import DuckDBEngine
 from akl.lakehouse.gold import GoldStore
 from akl.lakehouse.io import LakehouseIO
+from akl.observability.mlflow_tracking import log_metrics, log_params, mlflow_run
 
 
 @dataclass
@@ -85,6 +86,46 @@ class EmbeddingPipeline:
         return rows
 
     def run(
+        self,
+        *,
+        run_id: str,
+        limit: int | None = None,
+        batch_size: int | None = None,
+        document_ids: Sequence[str] | None = None,
+    ) -> EmbeddingRunReport:
+        with mlflow_run(
+            self.settings.observability,
+            run_name=run_id,
+            tags={"embedding_version": self.embedding_version},
+        ) as mlrun:
+            log_params(
+                mlrun,
+                {
+                    "provider": self.settings.embedding.embed_provider,
+                    "model_id": self.provider.model_id,
+                    "embedding_version": self.embedding_version,
+                    "batch_size": batch_size or self.settings.embedding.embed_batch_size,
+                    "limit": limit,
+                },
+            )
+            report = self._run(
+                run_id=run_id, limit=limit, batch_size=batch_size, document_ids=document_ids
+            )
+            log_metrics(
+                mlrun,
+                {
+                    "backlog": report.backlog,
+                    "cache_hits": report.cache_hits,
+                    "generated": report.generated,
+                    "written": report.written,
+                    "failed": report.failed,
+                    "duration_s": report.duration_s,
+                    "throughput_cps": report.throughput_cps,
+                },
+            )
+            return report
+
+    def _run(
         self,
         *,
         run_id: str,
