@@ -303,10 +303,13 @@ def test_auth_jwt_scopes_and_api_key_shape(monkeypatch: pytest.MonkeyPatch) -> N
             ).json()["error"]["code"]
             == "AKL-E1002"
         )
-        assert (
-            c.post("/v1/search", json={"query": "x"}, headers={"X-API-Key": "nope"}).status_code
-            == 401
-        )
+        # This fake AppState has no database, so any X-API-Key hits the "store unavailable" branch
+        # (not "wrong key") — that's now correctly a 503, not a 401 (see AuthError vs
+        # ApiKeyStoreUnavailableError). A real "wrong key -> 401" check lives in the live
+        # component test, where a database is actually available to check the key against.
+        no_db_resp = c.post("/v1/search", json={"query": "x"}, headers={"X-API-Key": "nope"})
+        assert no_db_resp.status_code == 503
+        assert no_db_resp.json()["error"]["code"] == "AKL-E1007"
         principal = auth.verify_token(reader)
         assert principal.has_scope("chat:write") and not principal.has_scope("documents:write")  # noqa: PT018
         health = c.get("/v1/health")
@@ -347,3 +350,93 @@ def test_openapi_and_docs_toggle(monkeypatch: pytest.MonkeyPatch) -> None:
     off = _settings(monkeypatch, AKL_AUTH_DISABLED="true", AKL_OPENAPI_ENABLED="false")
     with TestClient(create_app(off, state=_state(off, FakeRAG()))) as c:
         assert c.get("/openapi.json").status_code == 404
+
+
+# --------------------------------------------------------------------------- admin: RBAC, keys, audit, GDPR (Batch H)
+def test_admin_permissions_requires_scope_and_reports_not_found_without_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch, AKL_AUTH_DISABLED="false", AKL_JWT_SECRET="s" * 40)
+    auth = Authenticator(settings, None)
+    state = _state(settings, FakeRAG())
+    with TestClient(create_app(settings, state=state)) as c:
+        reader = auth.mint_token("bob", groups=[], security_levels=["public"], roles=["reader"])
+        denied = c.patch(
+            "/v1/admin/documents/00000000-0000-0000-0000-000000000000/permissions",
+            json={"security_level": "internal"},
+            headers={"Authorization": f"Bearer {reader}"},
+        )
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "AKL-E1003"
+
+        curator = auth.mint_token("carol", groups=[], security_levels=["public"], roles=["curator"])
+        not_found = c.patch(
+            "/v1/admin/documents/00000000-0000-0000-0000-000000000000/permissions",
+            json={"security_level": "internal"},
+            headers={"Authorization": f"Bearer {curator}"},
+        )
+        assert (
+            not_found.status_code == 404
+        )  # scope check passes; no database configured in this fake state
+        assert not_found.json()["error"]["code"] == "AKL-E6030"
+
+        bad_json = c.patch(
+            "/v1/admin/documents/not-a-uuid/permissions",
+            json={"bogus": True},
+            headers={"Authorization": f"Bearer {curator}"},
+        )
+        assert bad_json.status_code == 422  # extra="forbid" rejects unknown fields
+
+
+def test_admin_api_keys_reports_service_unavailable_not_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: 'no database configured' must be 503, never 401 (a client can't fix it by re-authenticating)."""
+    settings = _settings(monkeypatch, AKL_AUTH_DISABLED="true")
+    state = _state(settings, FakeRAG())
+    with TestClient(create_app(settings, state=state)) as c:
+        listed = c.get("/v1/admin/api-keys")
+        assert listed.status_code == 503
+        assert listed.json()["error"]["code"] == "AKL-E1007"
+        created = c.post("/v1/admin/api-keys", json={"name": "x", "roles": ["reader"]})
+        assert created.status_code == 503
+        revoked = c.delete("/v1/admin/api-keys/00000000-0000-0000-0000-000000000000")
+        assert revoked.status_code == 503
+
+
+def test_admin_audit_query_empty_without_db_but_requires_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(monkeypatch, AKL_AUTH_DISABLED="false", AKL_JWT_SECRET="s" * 40)
+    auth = Authenticator(settings, None)
+    state = _state(settings, FakeRAG())
+    with TestClient(create_app(settings, state=state)) as c:
+        reader = auth.mint_token("bob", groups=[], security_levels=["public"], roles=["reader"])
+        denied = c.get("/v1/admin/audit", headers={"Authorization": f"Bearer {reader}"})
+        assert denied.status_code == 403
+        curator = auth.mint_token("carol", groups=[], security_levels=["public"], roles=["curator"])
+        ok = c.get("/v1/admin/audit", headers={"Authorization": f"Bearer {curator}"})
+        assert ok.status_code == 200
+        assert ok.json() == []  # no database configured -> empty, not an error
+
+
+def test_admin_gdpr_self_service_vs_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, AKL_AUTH_DISABLED="false", AKL_JWT_SECRET="s" * 40)
+    auth = Authenticator(settings, None)
+    state = _state(settings, FakeRAG())
+    with TestClient(create_app(settings, state=state)) as c:
+        alice = auth.mint_token("alice", groups=[], security_levels=["public"], roles=["reader"])
+        own = c.delete(
+            "/v1/admin/gdpr/principals/alice", headers={"Authorization": f"Bearer {alice}"}
+        )
+        assert own.status_code == 503  # authorized (it's her own data); fails only on "no database"
+        other = c.delete(
+            "/v1/admin/gdpr/principals/bob", headers={"Authorization": f"Bearer {alice}"}
+        )
+        assert other.status_code == 403
+        assert other.json()["error"]["code"] == "AKL-E1003"
+        admin_tok = auth.mint_token("root", groups=[], security_levels=["public"], roles=["admin"])
+        admin_on_behalf = c.get(
+            "/v1/admin/gdpr/principals/bob/export", headers={"Authorization": f"Bearer {admin_tok}"}
+        )
+        assert admin_on_behalf.status_code == 503  # admin scope authorizes acting on bob's behalf

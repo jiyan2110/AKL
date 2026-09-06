@@ -52,6 +52,7 @@ EXPECTED = {
         "backup_postgres",
         "qdrant_snapshot",
         "backup_retention",
+        "audit_log_retention",
         "vacuum_analyze",
         "finalize",
     ),

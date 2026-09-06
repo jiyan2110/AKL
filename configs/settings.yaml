@@ -119,3 +119,10 @@ observability:
     akl_chunking: 90
     akl_embedding: 120
     akl_qdrant_sync: 120
+
+governance:
+  pii_scan_enabled: true
+  pii_types_enabled: [email, phone, ssn, credit_card, ip_address]
+  audit_log_enabled: true
+  audit_log_retention_days: 400
+  gdpr_export_max_conversations: 500

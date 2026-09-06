@@ -50,6 +50,7 @@ def akl_maintenance() -> None:
                 "quarantine_retention",
                 "retire_old_embedding_versions",
                 "backup_retention",
+                "audit_log_retention",
             )
             if "dry_run" not in params and op_name in dry_aware:
                 params = {**params, "dry_run": bool(dry)}
@@ -89,6 +90,12 @@ def akl_maintenance() -> None:
     backup_ret = op(
         "backup_retention", "backup_retention", "retention", days=int(retention.get("backups", 14))
     )(akl_run_id, dry)
+    audit_ret = op(
+        "audit_log_retention",
+        "audit_log_retention",
+        "retention",
+        days=int(retention.get("audit_log", 400)),
+    )(akl_run_id, dry)
     vacuum = op("vacuum_analyze", "vacuum_analyze", "vacuum_analyze")(akl_run_id, dry)
 
     @task.external_python(
@@ -106,7 +113,7 @@ def akl_maintenance() -> None:
 
     compact >> stats
     [backup_pg, snapshot] >> backup_ret
-    [bronze, quarantine, cache, conversations, retire, stats, backup_ret] >> vacuum
+    [bronze, quarantine, cache, conversations, retire, stats, backup_ret, audit_ret] >> vacuum
     finalize(
         akl_run_id,
         [
@@ -120,6 +127,7 @@ def akl_maintenance() -> None:
             backup_pg,
             snapshot,
             backup_ret,
+            audit_ret,
             vacuum,
         ],
     )

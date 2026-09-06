@@ -10,16 +10,23 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 
 from akl.config import Settings
 from akl.db.models import LineageEdge, PipelineRun, TaskRun
+from akl.db.repositories.documents import DocumentRepository
 from akl.db.repositories.lineage import LineageRepository
+from akl.db.repositories.pii import PiiRepository
 from akl.db.repositories.runs import RunRepository
 from akl.db.session import Database, DatabaseUnavailableError
 from akl.errors import AKLError
+from akl.ingestion.connectors.markdown import MarkdownConnector, MarkdownConnectorConfig
+from akl.ingestion.service import IngestionService
+from akl.lakehouse.engine import DuckDBEngine
+from akl.lakehouse.io import Layer
 from akl.observability.freshness import refresh_freshness_gauges
 from akl.observability.metrics import DAG_LAST_SUCCESS_TIMESTAMP, DAG_STALE
 from akl.pipelines import airflow_tasks as t
@@ -107,6 +114,11 @@ def test_task_entrypoints_bookkeeping_gates_and_maintenance(tag: str) -> None:
         run_id, "backup_retention", "backup_retention", days=3650, dry_run=True
     )
     assert backups["deleted"] == 0
+    audit_ret = t.maintenance_task(
+        run_id, "audit_log_retention", "audit_log_retention", days=3650, dry_run=True
+    )
+    assert audit_ret["rows_deleted"] == 0
+    assert audit_ret["dry_run"] is True
     with pytest.raises(AKLError):
         t.maintenance_task(run_id, "bogus", "not_an_operation")
 
@@ -163,4 +175,79 @@ def test_task_entrypoints_bookkeeping_gates_and_maintenance(tag: str) -> None:
         assert DAG_STALE.labels(dag_id="akl_ingestion")._value.get() == 0.0
         assert DAG_LAST_SUCCESS_TIMESTAMP.labels(dag_id="akl_ingestion")._value.get() > 0
     finally:
+        db.dispose()
+
+
+def test_pii_scanning_during_parse_backlog(tmp_path: Path) -> None:
+    """PII scanning (Batch H) runs inside the real parse_validate_to_silver task and is hashed-only."""
+    try:
+        settings = Settings.load()
+        db = Database(settings)
+        db.ping()
+    except (AKLError, DatabaseUnavailableError) as exc:  # pragma: no cover
+        pytest.skip(f"stack unavailable: {exc}")
+    engine = DuckDBEngine(settings)
+    ingest = IngestionService(settings, engine, db)
+    try:
+        ingest.io.ensure_bucket()
+    except AKLError as exc:  # pragma: no cover
+        pytest.skip(f"MinIO unavailable: {exc}")
+
+    tag = uuid.uuid4().hex[:8]
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "contact.md").write_text(
+        "# Contact\n\n"
+        "Reach the on-call engineer at oncall@example.com or 415-555-0100 for any incident "
+        "outside business hours. Escalate to the secondary on-call if there is no response "
+        "within fifteen minutes.\n",
+        encoding="utf-8",
+    )
+    cfg = MarkdownConnectorConfig(
+        id=f"ctest-pii-{tag}",
+        type="markdown",
+        root_path=root,
+        uri_base=f"https://ctest.example.com/pii-{tag}",
+        fetch_concurrency=1,
+    )
+    run_id = f"ctest-pipe-{tag}-pii"
+    doc_id: uuid.UUID | None = None
+    try:
+        ingest.run_connector(connector=MarkdownConnector(cfg), run_id=run_id)
+        report = t.parse_backlog(run_id, limit=1000)
+        assert report["considered"] >= 1
+
+        with db.session() as s:
+            doc = DocumentRepository(s).get_by_uri(f"{cfg.uri_base}/contact.md")
+            assert doc is not None
+            doc_id = doc.document_id
+            assert doc.status == "silver"
+
+            findings = PiiRepository(s).for_document(doc_id)
+            found_types = {f.pii_type for f in findings}
+            assert {"email", "phone"} <= found_types
+
+            # only the hash is ever stored -- the raw address/number never appears in any row
+            assert all(len(f.value_hash) == 64 for f in findings)
+            assert all("oncall@example.com" not in (f.value_hash or "") for f in findings)
+
+            counts = PiiRepository(s).counts_by_type(doc_id)
+            assert counts["email"] == 1
+    finally:
+        with db.session() as s:
+            s.execute(delete(TaskRun).where(TaskRun.run_id == run_id))
+            s.execute(delete(PipelineRun).where(PipelineRun.run_id == run_id))
+            if doc_id is not None:
+                from akl.db.models import Document, PiiMention
+
+                s.execute(delete(PiiMention).where(PiiMention.document_id == doc_id))
+                s.execute(delete(Document).where(Document.document_id == doc_id))
+            s.execute(
+                text("DELETE FROM connector_state WHERE connector_id = :cid").bindparams(cid=cfg.id)
+            )
+        for layer, dataset in ((Layer.SILVER, "documents"),):
+            keys = [f.key for f in ingest.io.list_files(layer, dataset) if run_id in f.key]
+            if keys:
+                ingest.io.delete_keys(keys)
+        engine.close()
         db.dispose()

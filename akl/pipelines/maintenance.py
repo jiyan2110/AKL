@@ -88,6 +88,25 @@ def quarantine_retention(
     }
 
 
+def audit_log_retention(db: Database, *, days: int, dry_run: bool = False) -> dict[str, Any]:
+    """Delete ``audit_log`` rows older than ``days`` (PRD §9.5: audit trail is retained, not forever)."""
+    cutoff = _cutoff(days)
+    with db.session() as s:
+        if dry_run:
+            rows = int(
+                s.scalar(
+                    text("SELECT count(*) FROM audit_log WHERE ts < :cutoff").bindparams(
+                        cutoff=cutoff
+                    )
+                )
+                or 0
+            )
+        else:
+            result = s.execute(text("DELETE FROM audit_log WHERE ts < :cutoff"), {"cutoff": cutoff})
+            rows = int(getattr(result, "rowcount", 0) or 0)
+    return {"rows_deleted": rows, "cutoff": cutoff.isoformat(), "dry_run": dry_run}
+
+
 def embedding_cache_eviction(db: Database, *, ttl_days: int) -> dict[str, Any]:
     with db.session() as s:
         repo = EmbeddingCacheRepository(s)

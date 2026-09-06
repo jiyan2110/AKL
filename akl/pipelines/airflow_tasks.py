@@ -223,6 +223,7 @@ def parse_backlog(
             "quarantined": rep.quarantined,
             "duplicates": rep.duplicates,
             "low_quality": rep.low_quality,
+            "pii_flagged": rep.pii_flagged,
             "failures": rep.failures[:20],
         }
         _record(
@@ -553,6 +554,11 @@ def maintenance_task(
             "qdrant_snapshot": lambda: m.qdrant_snapshot(ctx.settings, io),
             "backup_retention": lambda: m.backup_retention(
                 io, days=int(kwargs.get("days", 14)), dry_run=bool(kwargs.get("dry_run", False))
+            ),
+            "audit_log_retention": lambda: m.audit_log_retention(
+                ctx.db,
+                days=int(kwargs.get("days", ctx.settings.governance.audit_log_retention_days)),
+                dry_run=bool(kwargs.get("dry_run", False)),
             ),
             "vacuum_analyze": lambda: m.vacuum_analyze(ctx.db),
         }

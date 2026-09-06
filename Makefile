@@ -179,6 +179,20 @@ mlflow-up: ## Start the MLflow tracking server (needs AKL_MLFLOW_ENABLED=true in
 	$(COMPOSE_DEV) --profile mlflow up -d mlflow
 	@echo "MLflow: http://localhost:$${AKL_DEV_MLFLOW_PORT:-5000}"
 
+.PHONY: prod-build prod-up prod-down prod-logs
+prod-build: ## Build the production API image
+	$(COMPOSE_PROD) build akl-api
+
+prod-up: env ## Start the full stack behind Traefik/TLS (needs .env.prod - see .env.prod.example); NOT combined with docker-compose.dev.yml (no host ports on internal services)
+	@test -f .env.prod || (echo "Missing .env.prod - copy .env.prod.example and fill it in" && exit 1)
+	$(COMPOSE_PROD) --env-file .env --env-file .env.prod up -d --remove-orphans
+
+prod-down: ## Stop the production stack
+	$(COMPOSE_PROD) --env-file .env --env-file .env.prod down
+
+prod-logs: ## Tail the production API logs
+	$(COMPOSE_PROD) --env-file .env --env-file .env.prod logs -f --tail=200 akl-api
+
 .PHONY: token
 token: ## Mint a development JWT (needs AKL_JWT_SECRET)
 	$(UV) run akl-cli auth mint-token --user dev --groups eng --levels public,internal,restricted --roles admin

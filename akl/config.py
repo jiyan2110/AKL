@@ -356,6 +356,21 @@ class ObservabilitySettings(_SectionSettings):
     )
 
 
+class GovernanceSettings(_SectionSettings):
+    """PII scanning, GDPR erasure, retention (PRD §9.5-9.8)."""
+
+    yaml_section: ClassVar[str] = "governance"
+    model_config = SettingsConfigDict(env_prefix="AKL_")
+
+    pii_scan_enabled: bool = True
+    pii_types_enabled: list[str] = Field(
+        default_factory=lambda: ["email", "phone", "ssn", "credit_card", "ip_address"]
+    )
+    audit_log_enabled: bool = True
+    audit_log_retention_days: int = Field(default=400, ge=1)  # ~13 months
+    gdpr_export_max_conversations: int = Field(default=500, ge=1)
+
+
 _SECTIONS: tuple[type[_SectionSettings], ...] = (
     CoreSettings,
     DatabaseSettings,
@@ -368,6 +383,7 @@ _SECTIONS: tuple[type[_SectionSettings], ...] = (
     ApiSettings,
     LLMSettings,
     ObservabilitySettings,
+    GovernanceSettings,
 )
 
 
@@ -385,6 +401,7 @@ class Settings(BaseModel):
     api: ApiSettings
     llm: LLMSettings
     observability: ObservabilitySettings
+    governance: GovernanceSettings
     config_file: Path | None = None
 
     @model_validator(mode="after")
@@ -452,6 +469,7 @@ class Settings(BaseModel):
                 api=sections["api"],
                 llm=sections["llm"],
                 observability=sections["observability"],
+                governance=sections["governance"],
                 config_file=resolved_file if resolved_file.exists() else None,
             )
         except ValidationError as exc:

@@ -354,6 +354,105 @@ def test_api_end_to_end(api: dict[str, Any]) -> None:
     assert [t["role"] for t in conv["turns"]] == ["user", "assistant", "user", "assistant"]
     assert c.get(f"/v1/conversations/{uuid.uuid4()}").status_code == 404
 
+    # --- admin: permissions, API keys, audit, GDPR, PII (Milestones 49-52) --------------------------
+    principal_id = api["principal_id"]
+    perm = c.patch(
+        f"/v1/admin/documents/{doc_ids[0]}/permissions",
+        json={"security_level": "restricted", "allowed_groups": ["ops"]},
+    )
+    assert perm.status_code == 200, perm.text
+    assert perm.json() == {
+        "document_id": doc_ids[0],
+        "security_level": "restricted",
+        "allowed_groups": ["ops"],
+    }
+    restricted_visible = c.get(f"/v1/documents/{doc_ids[0]}")
+    assert (
+        restricted_visible.status_code == 404
+    )  # our token's groups={"eng"} don't intersect allowed_groups=["ops"]
+    c.patch(
+        f"/v1/admin/documents/{doc_ids[0]}/permissions",
+        json={"security_level": "internal", "allowed_groups": []},
+    )  # restore
+
+    created = c.post("/v1/admin/api-keys", json={"name": "ci-probe", "roles": ["reader"]})
+    assert created.status_code == 201, created.text
+    key_id = created.json()["key_id"]
+    assert created.json()["token"].startswith("akl_")
+    listed = c.get("/v1/admin/api-keys").json()
+    assert any(k["key_id"] == key_id for k in listed)
+    revoke = c.delete(f"/v1/admin/api-keys/{key_id}")
+    assert revoke.status_code == 204
+    assert (
+        next(k for k in c.get("/v1/admin/api-keys").json() if k["key_id"] == key_id)["revoked_at"]
+        is not None
+    )
+    bad_key = c.post(
+        "/v1/search", json={"query": "x"}, headers={"X-API-Key": "akl_deadbeef_not-a-real-secret"}
+    )
+    assert (
+        bad_key.status_code == 401
+    )  # a real database is present here, so this is a genuine "wrong key" rejection
+    assert bad_key.json()["error"]["code"] == "AKL-E1005"
+
+    audit_rows = c.get("/v1/admin/audit", params={"principal_id": principal_id, "limit": 50}).json()
+    actions = {r["action"] for r in audit_rows}
+    assert {"document.permissions.update", "api_key.create", "api_key.revoke"} <= actions
+
+    export = c.get(f"/v1/admin/gdpr/principals/{principal_id}/export")
+    assert export.status_code == 200, export.text
+    assert export.json()["principal_id"] == principal_id
+    assert len(export.json()["conversations"]) >= 1
+    erase = c.delete(f"/v1/admin/gdpr/principals/{principal_id}")
+    assert erase.status_code == 200
+    assert erase.json()["conversations_deleted"] >= 1
+    assert c.get(f"/v1/conversations/{conv_id}").status_code == 404  # actually erased
+    forbidden_gdpr = c.delete("/v1/admin/gdpr/principals/someone-else")
+    assert forbidden_gdpr.status_code == 403
+
+    pii_doc = c.post(
+        "/v1/documents",
+        files=[
+            (
+                "files",
+                (
+                    "contact.md",
+                    b"# Contact\n\nReach the on-call engineer at oncall@example.com.\n",
+                    "text/markdown",
+                ),
+            )
+        ],
+        data={"security_level": "internal"},
+    )
+    assert pii_doc.status_code == 202, pii_doc.text
+    pii_document_id = pii_doc.json()["items"][0]["document_id"]
+    # PII scanning runs inside the real parse_backlog task (stubbed out by `fake_pipeline` in this
+    # test's fixture, see test_pipeline_tasks_live.py for coverage against the real task entrypoint);
+    # here we only confirm the lineage endpoint added in this batch is reachable for the new document.
+    trace = c.get(f"/v1/admin/lineage/documents/{pii_document_id}")
+    assert trace.status_code == 200, trace.text
+    assert trace.json()["document_id"] == pii_document_id
+
+    # --- hard delete: purges the raw Bronze object in addition to everything soft delete does ------------------
+    bronze_key = trace.json()["versions"][0]["bronze_object_key"]
+    io = api["state"].rag.io
+    assert io.object_exists(bronze_key)
+    no_confirm = c.delete(f"/v1/documents/{pii_document_id}", params={"mode": "hard"})
+    assert no_confirm.status_code == 400
+    assert no_confirm.json()["error"]["code"] == "AKL-E3060"
+    hard = c.delete(
+        f"/v1/documents/{pii_document_id}",
+        params={"mode": "hard"},
+        headers={"X-Confirm": "hard-delete"},
+    )
+    assert hard.status_code == 200, hard.text
+    assert hard.json()["mode"] == "hard"
+    assert not io.object_exists(bronze_key)  # raw bytes actually purged, unlike soft delete
+    audit_hard = c.get(
+        "/v1/admin/audit", params={"action": "document.delete.hard", "limit": 5}
+    ).json()
+    assert any(r["resource_id"] == pii_document_id for r in audit_hard)
+
     # --- chat: SSE stream ----------------------------------------------------------------------------
     with c.stream(
         "POST", "/v1/chat", json={"query": "how are nightly postgres backups taken", "stream": True}

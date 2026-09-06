@@ -1,0 +1,11 @@
+# Dev/self-signed fallback: used when AKL_TLS_MODE=selfsigned instead of ACME (see .env.prod.example).
+# Real deployments should rely on the `letsencrypt` resolver in traefik.yml instead of this file.
+tls:
+  certificates:
+    - certFile: /etc/traefik/dynamic/selfsigned.crt
+      keyFile: /etc/traefik/dynamic/selfsigned.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/dynamic/selfsigned.crt
+        keyFile: /etc/traefik/dynamic/selfsigned.key

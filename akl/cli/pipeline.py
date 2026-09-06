@@ -123,6 +123,7 @@ def maintenance(
         ("backup_postgres", {}),
         ("qdrant_snapshot", {}),
         ("backup_retention", {"dry_run": dry_run}),
+        ("audit_log_retention", {"dry_run": dry_run}),
         ("vacuum_analyze", {}),
     ]
     failed = False

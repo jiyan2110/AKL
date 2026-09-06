@@ -252,7 +252,9 @@ class LakehouseIO:
         return files
 
     def delete_keys(self, keys: Sequence[str], *, allow_bronze_raw: bool = False) -> int:
-        forbidden = [key for key in keys if key.startswith("bronze/raw/")]
+        forbidden = (
+            [] if allow_bronze_raw else [key for key in keys if key.startswith("bronze/raw/")]
+        )
         if forbidden:
             raise LakehouseIOError(
                 "refusing to delete immutable bronze/raw objects", details={"keys": forbidden[:5]}

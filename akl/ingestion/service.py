@@ -19,8 +19,10 @@ from akl.config import Settings
 from akl.db.models import Document
 from akl.db.repositories.connector_state import ConnectorStateRepository
 from akl.db.repositories.documents import DocumentRepository
+from akl.db.repositories.pii import PiiRepository
 from akl.db.session import Database
 from akl.errors import AKLError
+from akl.governance.pii import scan_text
 from akl.ingestion.connectors.base import (
     BaseConnector,
     ConnectorConfig,
@@ -62,6 +64,7 @@ class ParseReport:
     quarantined: int = 0
     duplicates: int = 0
     low_quality: int = 0
+    pii_flagged: int = 0
     failures: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -251,6 +254,16 @@ class IngestionService:
                     allowed_groups=unified.allowed_groups,
                     parser_version=parser_version,
                 )
+                if self.settings.governance.pii_scan_enabled:
+                    findings = scan_text(
+                        unified.text,
+                        enabled_types=frozenset(self.settings.governance.pii_types_enabled),
+                    )
+                    if findings:
+                        PiiRepository(session).record(
+                            document_id=recorded.document_id, findings=findings
+                        )
+                        report.pii_flagged += 1
                 marks.append(
                     {
                         "document_version_id": recorded.document_version_id,

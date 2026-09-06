@@ -20,6 +20,7 @@ from fastapi import (
 from sqlalchemy import func, select
 
 from akl.api import metrics
+from akl.api.audit import audit
 from akl.api.deps import AppState, get_request_id, get_state, rate_limited, scoped
 from akl.api.schemas.common import Page
 from akl.api.schemas.documents import (
@@ -34,6 +35,7 @@ from akl.api.schemas.documents import (
 from akl.db.models import Chunk, Document
 from akl.db.repositories.chunks import ChunkRepository
 from akl.db.repositories.documents import DocumentRepository
+from akl.db.repositories.pii import PiiRepository
 from akl.errors import AKLError
 from akl.ids import canonicalize_uri
 from akl.lakehouse.bronze import BronzeStore
@@ -67,6 +69,15 @@ class UploadTooLargeError(AKLError):
 class DocumentNotFoundError(AKLError):
     code = "AKL-E6030"
     http_status = 404
+    retryable = False
+
+
+class HardDeleteConfirmationRequiredError(AKLError):
+    """Missing/wrong ``X-Confirm`` header on a hard delete (AKL-E3060) — a client input error, not
+    a server fault, so it must not be reported as a generic 500."""
+
+    code = "AKL-E3060"
+    http_status = 400
     retryable = False
 
 
@@ -339,6 +350,7 @@ def document_chunks(
 @router.delete("/documents/{document_id}", response_model=DeleteResponse)
 def delete_document(
     document_id: str,
+    request: Request,
     mode: Literal["soft", "hard"] = "soft",
     state: AppState = Depends(get_state),
     principal: Principal = Depends(scoped("documents:delete")),
@@ -349,8 +361,12 @@ def delete_document(
     if state.db is None or state.rag is None:
         raise DocumentNotFoundError("document not found")
     if mode == "hard" and x_confirm != "hard-delete":
-        raise AKLError("hard delete requires header X-Confirm: hard-delete", details={"mode": mode})
+        raise HardDeleteConfirmationRequiredError(
+            "hard delete requires header X-Confirm: hard-delete", details={"mode": mode}
+        )
     run_id = f"api-{request_id[:12]}"
+    bronze_keys_purged = 0
+    pii_rows_purged = 0
     with state.lock, state.db.session() as s:
         repo = DocumentRepository(s)
         doc = repo.get(did)
@@ -366,6 +382,30 @@ def delete_document(
         if state.rag.qdrant is not None:
             state.rag.qdrant.delete_documents([str(did)])
         state.rag.exclude_deleted([str(c) for c in chunk_ids])
+        if mode == "hard":
+            # Bronze/raw and Gold/Silver Parquet are append-only (ADR-002): the tombstone above already
+            # removes this document from every current-state view; the physical rows are purged from
+            # Parquet by the next compaction pass (akl_maintenance DAG). What a hard delete does *now*,
+            # beyond soft delete, is remove the two things that are not compaction-eligible in place:
+            # the raw source bytes in object storage, and the PII-mention index for this document.
+            versions = repo.versions(did)
+            bronze_keys = sorted({v.bronze_object_key for v in versions if v.bronze_object_key})
+            if bronze_keys:
+                bronze_keys_purged = state.rag.io.delete_keys(bronze_keys, allow_bronze_raw=True)
+            pii_rows_purged = PiiRepository(s).delete_for_document(did)
+    audit(
+        state,
+        request,
+        principal=principal,
+        action=f"document.delete.{mode}",
+        resource_type="document",
+        resource_id=document_id,
+        details={
+            "chunks_tombstoned": chunks,
+            "bronze_keys_purged": bronze_keys_purged,
+            "pii_rows_purged": pii_rows_purged,
+        },
+    )
     return DeleteResponse(
         document_id=document_id, mode=mode, status="deleted", chunks_tombstoned=chunks
     )
